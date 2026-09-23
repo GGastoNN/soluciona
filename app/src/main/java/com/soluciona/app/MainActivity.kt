@@ -128,7 +128,7 @@ private fun ScreenFrame(
 }
 
 @Composable
-private fun PrimaryButton(text: String, onClick: () -> Unit, enabled: Boolean = true, icon: @Composable (() -> Unit)? = null) {
+private fun PrimaryButton(text: String, enabled: Boolean = true, icon: @Composable (() -> Unit)? = null, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         enabled = enabled,
