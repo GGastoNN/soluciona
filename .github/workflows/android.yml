@@ -43,12 +43,12 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.3.0-branding-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.4.0-socio-debug.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.3.0-branding-debug
-          path: Soluciona-0.3.0-branding-debug.apk
+          name: Soluciona-0.4.0-socio-debug
+          path: Soluciona-0.4.0-socio-debug.apk
           if-no-files-found: error
           retention-days: 14
