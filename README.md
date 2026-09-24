@@ -1,33 +1,33 @@
-# Soluciona 0.3.0 — Branding UI Beta
+# Soluciona. · Beta 0.4.0
 
-Versión Android de demostración diseñada a partir del branding visual de Soluciona.
+Versión de prueba basada en el branding aprobado y el último prototipo funcional revisado con socios.
 
-## Objetivo visual
+## Nuevas funciones
 
-La interfaz replica la dirección de las capturas de marca: fondo claro, azul Soluciona, tarjetas blancas, navegación inferior flotante, iconografía de servicios, perfiles profesionales, seguimiento por timeline y chat.
+- Branding Soluciona con splash, icono, navegación inferior y UI móvil.
+- Descripción del problema con sugerencia automática de rubro.
+- Detección local de riesgos de gas, electricidad e inundación.
+- Botón destacado de emergencia y priorización por cercanía.
+- Disponibilidad por rubro: las categorías sin profesionales aparecen deshabilitadas.
+- Listado de profesionales por categoría, cercanía, puntuación y precio.
+- Flujo de solicitud, seguimiento, chat y reportes.
+- Calificación de 1 a 5 estrellas únicamente al finalizar un trabajo.
+- Comentarios/reseñas vinculados a cada servicio finalizado.
+- La puntuación local del profesional refleja las reseñas creadas en la beta.
+- Alta profesional local con rubros, zona, matrícula, antecedentes y seguro RC.
+- Un profesional dado de alta localmente puede habilitar un rubro sin oferta.
+- Estados documentales `EN REVISIÓN` hasta que exista validación real.
+- Política de privacidad y términos en modo borrador/beta.
+- Pagos, geolocalización y verificaciones siguen siendo simulados: no hay Firebase ni dinero real.
 
-## Pantallas
+## Compilación
 
-- Splash Soluciona.
-- Inicio con búsqueda, categorías y profesionales destacados.
-- Listado de profesionales con filtros.
-- Perfil profesional con verificaciones diferenciadas.
-- Solicitud de servicio con pasos, urgencia, dirección y foto.
-- Resumen y confirmación.
-- Seguimiento del servicio con timeline y mapa visual.
-- Mis solicitudes.
-- Chat local.
-- Perfil y documentos legales.
-- Panel Soluciona Pro de demostración.
+El workflow `.github/workflows/android.yml` genera:
 
-## Verificaciones y legal
+`Soluciona-0.4.0-socio-debug.apk`
 
-Identidad, matrícula, antecedentes y seguro RC se muestran como estados DEMO. La app no afirma que exista validación real. La beta tampoco procesa ni retiene dinero real. Incluye borradores internos de privacidad y términos que requieren revisión profesional antes de un lanzamiento comercial.
+Usa JDK 17, Gradle 8.7 y Android SDK 34.
 
-## Datos
+## Importante
 
-Todo funciona localmente con `localStorage` dentro del WebView. No hay Firebase todavía.
-
-## Build
-
-GitHub Actions compila `Soluciona-0.3.0-branding-debug.apk` con Android SDK 34 y JDK 17.
+No agregar archivos `.md`, `.txt` u otros formatos dentro de `app/src/main/res/drawable*`. Android solo admite recursos compatibles en esas carpetas. La documentación debe permanecer fuera de `res/`.
