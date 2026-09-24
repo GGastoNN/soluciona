@@ -1,63 +1,33 @@
-# Soluciona · Android MVP
+# Soluciona 0.3.0 — Branding UI Beta
 
-Aplicación Android nativa inspirada en las pantallas de referencia provistas. El MVP conecta clientes con prestadores de servicios y está preparado para compilar un APK con GitHub Actions.
+Versión Android de demostración diseñada a partir del branding visual de Soluciona.
 
-## Incluye
+## Objetivo visual
 
-- Registro e inicio de sesión de clientes y prestadores.
-- Perfil del prestador con servicios, zona, matrícula, descripción y valor de visita.
-- Categorías: electricidad, plomería, gas, climatización, cerrajería y construcción.
-- Búsqueda/listado de prestadores por categoría, zona, reputación, trabajos y precio.
-- Flujo de solicitud: problema → profesional → confirmación → seguimiento.
-- Estados: solicitado, confirmado, en camino y finalizado.
-- Panel del prestador para aceptar y avanzar trabajos.
-- Historial de solicitudes para ambas partes.
-- Chat local por solicitud.
-- Llamada telefónica al prestador desde el detalle.
-- Calificación del servicio al finalizar.
-- Persistencia local con SharedPreferences + JSON.
-- Datos demo para probar el flujo inmediatamente.
-- Workflow `.github/workflows/android.yml` que genera `app-debug.apk` y lo publica como artifact.
+La interfaz replica la dirección de las capturas de marca: fondo claro, azul Soluciona, tarjetas blancas, navegación inferior flotante, iconografía de servicios, perfiles profesionales, seguimiento por timeline y chat.
 
-## Cuentas demo
+## Pantallas
 
-- Cliente: `cliente@soluciona.app` / `demo1234`
-- Prestador: `martin@soluciona.app` / `demo1234`
+- Splash Soluciona.
+- Inicio con búsqueda, categorías y profesionales destacados.
+- Listado de profesionales con filtros.
+- Perfil profesional con verificaciones diferenciadas.
+- Solicitud de servicio con pasos, urgencia, dirección y foto.
+- Resumen y confirmación.
+- Seguimiento del servicio con timeline y mapa visual.
+- Mis solicitudes.
+- Chat local.
+- Perfil y documentos legales.
+- Panel Soluciona Pro de demostración.
 
-## Compilar con GitHub Actions
+## Verificaciones y legal
 
-1. Subí este proyecto a un repositorio de GitHub.
-2. Abrí la pestaña **Actions**.
-3. Elegí **Build Android APK**.
-4. Ejecutá **Run workflow** o hacé un push a `main`.
-5. Al terminar, abrí el run y descargá el artifact **soluciona-debug-apk**.
+Identidad, matrícula, antecedentes y seguro RC se muestran como estados DEMO. La app no afirma que exista validación real. La beta tampoco procesa ni retiene dinero real. Incluye borradores internos de privacidad y términos que requieren revisión profesional antes de un lanzamiento comercial.
 
-El workflow usa JDK 17, Gradle 8.7, Android SDK 34 y `assembleDebug`.
+## Datos
 
-## Arquitectura actual
+Todo funciona localmente con `localStorage` dentro del WebView. No hay Firebase todavía.
 
-Este MVP es **local-first**: usuarios, solicitudes y mensajes viven en el teléfono. Esto permite validar UX y generar un APK sin credenciales externas.
+## Build
 
-Para producción conviene reemplazar `LocalRepository` por un backend real (por ejemplo Firebase o Supabase) y agregar:
-
-- autenticación segura y recuperación de contraseña;
-- base de datos remota y sincronización en tiempo real;
-- verificación documental real de identidad/matrícula;
-- geolocalización y cálculo real de distancia;
-- push notifications;
-- carga de fotos, video y audio;
-- pagos/señas, facturación y comprobantes;
-- disponibilidad/calendario del prestador;
-- moderación, soporte, reportes y bloqueo;
-- términos, privacidad, tratamiento de datos y cumplimiento legal;
-- firma de release y publicación en Play Store.
-
-## Branding
-
-- Nombre: **Soluciona.**
-- Package: `com.soluciona.app`
-- UI: Jetpack Compose + Material 3.
-
-## Release firmado
-
-El workflow actual genera un APK debug, ideal para instalar y probar. Para una versión release firmada se deben crear un keystore y secretos en GitHub Actions; no subas claves privadas al repositorio.
+GitHub Actions compila `Soluciona-0.3.0-branding-debug.apk` con Android SDK 34 y JDK 17.
