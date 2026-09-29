@@ -1,7 +1,11 @@
 {
+  "name": "soluciona-tools",
   "private": true,
   "type": "module",
+  "scripts": {
+    "seed": "node seed-firestore.mjs"
+  },
   "dependencies": {
-    "firebase-admin": "^14.0.0"
+    "firebase-admin": "^13.5.0"
   }
 }
