@@ -79,13 +79,6 @@ android {
         }
     }
 
-    // If old com.soluciona.app sources are still present in GitHub after a manual upload,
-    // exclude them so they cannot be compiled into the new package.
-    sourceSets {
-        getByName("main") {
-            java.exclude("com/soluciona/app/**")
-        }
-    }
 
     buildFeatures {
         buildConfig = true
