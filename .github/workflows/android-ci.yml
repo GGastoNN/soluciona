@@ -28,20 +28,16 @@ jobs:
           if not path.exists():
               print(f"::error title=Firebase config missing::Descargá google-services.json para {expected} y guardalo en app/google-services.json")
               sys.exit(1)
-          try:
-              data = json.loads(path.read_text(encoding="utf-8"))
-          except Exception as e:
-              print(f"::error title=Firebase config invalid::{e}")
-              sys.exit(1)
+          data = json.loads(path.read_text(encoding="utf-8"))
           packages = [c.get("client_info", {}).get("android_client_info", {}).get("package_name", "") for c in data.get("client", [])]
           if expected not in packages:
-              print(f"::error title=Firebase package mismatch::google-services.json contiene {packages or ['sin package']} y debe contener {expected}. Registrá la nueva app Android en Firebase y reemplazá el archivo.")
+              print(f"::error title=Firebase package mismatch::google-services.json contiene {packages or ['sin package']} y debe contener {expected}.")
               sys.exit(1)
           matching = next(c for c in data.get("client", []) if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == expected)
           app_id = matching.get("client_info", {}).get("mobilesdk_app_id", "")
           legacy_app_id = "1:1010518269428:android:20355f9950cd96fd17ada1"
           if not app_id or app_id == legacy_app_id:
-              print("::error title=Firebase app ID incorrecto::El archivo parece ser el google-services.json anterior con package_name editado a mano. Registrá com.fixhome.soluciona como una NUEVA app Android en Firebase y descargá su google-services.json real.")
+              print("::error title=Firebase app ID incorrecto::Descargá el google-services.json real de com.fixhome.soluciona.")
               sys.exit(1)
           print(f"Firebase OK: {expected} / {app_id}")
           PY
@@ -69,12 +65,12 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Copy APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.6.4-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.8.0-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.6.4-debug
-          path: Soluciona-0.6.4-debug.apk
+          name: Soluciona-0.8.0-debug
+          path: Soluciona-0.8.0-debug.apk
           if-no-files-found: error
           retention-days: 14

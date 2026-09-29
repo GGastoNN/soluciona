@@ -1,0 +1,25 @@
+name: Seed Firebase Catalog
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: Install seed tool
+        working-directory: tools
+        run: npm install --no-audit --no-fund
+      - name: Seed zones and categories
+        working-directory: tools
+        env:
+          FIREBASE_PROJECT_ID: soluciona-dev
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: npm run seed

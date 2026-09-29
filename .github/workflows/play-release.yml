@@ -21,24 +21,12 @@ jobs:
           import json, pathlib, sys
           expected = "com.fixhome.soluciona"
           path = pathlib.Path("app/google-services.json")
-          if not path.exists():
-              print(f"::error title=Firebase config missing::Descargá google-services.json para {expected} y guardalo en app/google-services.json")
-              sys.exit(1)
-          try:
-              data = json.loads(path.read_text(encoding="utf-8"))
-          except Exception as e:
-              print(f"::error title=Firebase config invalid::{e}")
-              sys.exit(1)
-          packages = [c.get("client_info", {}).get("android_client_info", {}).get("package_name", "") for c in data.get("client", [])]
-          if expected not in packages:
-              print(f"::error title=Firebase package mismatch::google-services.json contiene {packages or ['sin package']} y debe contener {expected}. Registrá la nueva app Android en Firebase y reemplazá el archivo.")
-              sys.exit(1)
-          matching = next(c for c in data.get("client", []) if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == expected)
-          app_id = matching.get("client_info", {}).get("mobilesdk_app_id", "")
-          legacy_app_id = "1:1010518269428:android:20355f9950cd96fd17ada1"
-          if not app_id or app_id == legacy_app_id:
-              print("::error title=Firebase app ID incorrecto::El archivo parece ser el google-services.json anterior con package_name editado a mano. Registrá com.fixhome.soluciona como una NUEVA app Android en Firebase y descargá su google-services.json real.")
-              sys.exit(1)
+          if not path.exists(): sys.exit("Falta app/google-services.json")
+          data = json.loads(path.read_text(encoding="utf-8"))
+          matches = [c for c in data.get("client", []) if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == expected]
+          if not matches: sys.exit(f"Firebase package debe ser {expected}")
+          app_id = matches[0].get("client_info", {}).get("mobilesdk_app_id", "")
+          if not app_id or app_id == "1:1010518269428:android:20355f9950cd96fd17ada1": sys.exit("Firebase App ID incorrecto")
           print(f"Firebase OK: {expected} / {app_id}")
           PY
 
@@ -78,6 +66,7 @@ jobs:
           ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
           ADMOB_BANNER_ID: ${{ secrets.ADMOB_BANNER_ID }}
           DOCUMENTS_API_URL: ${{ vars.DOCUMENTS_API_URL }}
+          MARKETPLACE_API_URL: ${{ vars.MARKETPLACE_API_URL }}
         shell: bash
         run: |
           gradle --no-daemon :app:bundleRelease \
@@ -87,22 +76,23 @@ jobs:
             -PKEY_PASSWORD="$KEY_PASS" \
             -PADMOB_APP_ID="$ADMOB_APP_ID" \
             -PADMOB_BANNER_ID="$ADMOB_BANNER_ID" \
-            -PDOCUMENTS_API_URL="$DOCUMENTS_API_URL"
+            -PDOCUMENTS_API_URL="$DOCUMENTS_API_URL" \
+            -PMARKETPLACE_API_URL="$MARKETPLACE_API_URL"
 
       - name: Prepare release artifacts
         shell: bash
         run: |
-          cp app/build/outputs/bundle/release/app-release.aab Soluciona-0.6.4-play.aab
+          cp app/build/outputs/bundle/release/app-release.aab Soluciona-0.8.0-play.aab
           mkdir -p play-artifacts
-          cp Soluciona-0.6.4-play.aab play-artifacts/
+          cp Soluciona-0.8.0-play.aab play-artifacts/
           if [ -f app/build/outputs/mapping/release/mapping.txt ]; then
-            cp app/build/outputs/mapping/release/mapping.txt play-artifacts/mapping-0.6.4.txt
+            cp app/build/outputs/mapping/release/mapping.txt play-artifacts/mapping-0.8.0.txt
           fi
 
       - name: Upload Play artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.6.4-play
+          name: Soluciona-0.8.0-play
           path: play-artifacts/
           if-no-files-found: error
           retention-days: 30
