@@ -1,43 +1,25 @@
-# Soluciona 0.6.0 — Play Release Candidate
+# Worker R2 — documentos profesionales
 
-Base Android preparada para dejar atrás las cuentas demo y operar con usuarios reales en Firebase Authentication + Cloud Firestore.
+La app 0.6.0 puede subir PDF/JPEG/PNG/WebP directamente a este Worker usando un Firebase ID Token.
 
-## Incluye
+Binding R2 requerido:
 
-- Registro real de cliente: nombre, email, teléfono, contraseña y dirección.
-- Registro real de profesional: mismos datos + servicios, zona y matrícula/habilitación declarada.
-- Verificación de email real con Firebase Authentication.
-- Verificación de teléfono por SMS real con Firebase Phone Auth.
-- Recuperación de contraseña.
-- Catálogo de zonas y rubros desde Firestore.
-- Profesionales visibles solo si `verificationStatus == APPROVED` y `availability == true`.
-- Solicitudes reales en Firestore, con dirección separada en `service_request_private`.
-- Flujo profesional: pedido -> aceptado -> en camino -> en trabajo -> finalizado.
-- Chat básico real en Firestore una vez aceptada la solicitud.
-- AdMob banner inferior adaptable.
-- UMP (User Messaging Platform) para consentimiento de publicidad.
-- Target SDK 36 / Compile SDK 36.
-- Workflow GitHub Actions para APK debug y AAB firmado de Play Console.
-- R8/minificación en release.
+- `DOCUMENTS` -> bucket privado `soluciona-dev-documents` (o su equivalente de producción)
 
-## Importante antes de producción pública
+Variables:
 
-Este proyecto trae `google-services.json` de `soluciona-dev`, útil para pruebas reales e Internal Testing. Para producción pública reemplazarlo por el archivo del proyecto Firebase `soluciona-prod`.
+- `FIREBASE_PROJECT_ID`
+- `MAX_UPLOAD_BYTES` (default recomendado 10485760)
 
-El build `release` NO se genera si faltan IDs reales de AdMob o la upload key. Esto evita publicar accidentalmente anuncios de prueba.
+Deploy:
 
-## Build debug
+```bash
+npm install
+npx wrangler deploy
+```
 
-El workflow `.github/workflows/android-ci.yml` genera `Soluciona-0.6.0-debug.apk` usando IDs de anuncio de prueba de Google.
+Copiá la URL `https://...workers.dev` y guardala como GitHub Actions Variable:
 
-## Build Play Console
+`DOCUMENTS_API_URL`
 
-El workflow `.github/workflows/play-release.yml` genera:
-
-`Soluciona-0.6.0-play.aab`
-
-Requiere los secretos GitHub descriptos en `PLAY_CONSOLE_CHECKLIST.md`.
-
-## Estado del backend documental
-
-La app ya separa la verificación profesional de la visibilidad pública. La carga privada de matrícula/antecedentes/seguro debe conectarse al Worker R2 antes de aprobar profesionales a escala. Mientras tanto, la operación puede gestionar documentación manualmente desde administración y mantener los perfiles en `PENDING_DOCUMENTS` / `PENDING_REVIEW`.
+Para producción cambiá `FIREBASE_PROJECT_ID` y el bucket al proyecto/entorno de producción antes de desplegar.

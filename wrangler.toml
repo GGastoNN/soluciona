@@ -1,0 +1,11 @@
+name = "soluciona-dev-api"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "soluciona-dev"
+MAX_UPLOAD_BYTES = "10485760"
+
+[[r2_buckets]]
+binding = "DOCUMENTS"
+bucket_name = "soluciona-dev-documents"
