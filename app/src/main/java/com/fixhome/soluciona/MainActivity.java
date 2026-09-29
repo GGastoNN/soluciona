@@ -58,7 +58,6 @@ public class MainActivity extends Activity {
         final int surfaceColor = darkMode ? Color.rgb(15, 23, 42) : Color.rgb(244, 247, 252);
 
         try {
-            configureSystemBars(darkMode, surfaceColor);
             buildUi(darkMode, surfaceColor);
             configureWebView();
             initializeServicesSafely();
@@ -126,6 +125,7 @@ public class MainActivity extends Activity {
         ));
 
         setContentView(root);
+        configureSystemBars(darkMode, surfaceColor);
         applySystemBarInsets(root);
         registerSystemBackHandler();
     }
@@ -212,27 +212,45 @@ public class MainActivity extends Activity {
     }
 
     private void configureSystemBars(boolean darkMode, int surfaceColor) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            // Android 15+ enforces edge-to-edge for modern targets. We explicitly opt in,
-            // then add the real system-bar/cutout insets to the root view below.
-            getWindow().setDecorFitsSystemWindows(false);
-            getWindow().setStatusBarColor(Color.TRANSPARENT);
-            getWindow().setNavigationBarColor(Color.TRANSPARENT);
-            WindowInsetsController controller = getWindow().getInsetsController();
-            if (controller != null) {
-                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-                controller.setSystemBarsAppearance(darkMode ? 0 : mask, mask);
-            }
-        } else {
-            getWindow().setStatusBarColor(surfaceColor);
-            getWindow().setNavigationBarColor(surfaceColor);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                int flags = darkMode ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-                if (!darkMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        // Some OEM Android builds return a null decor/insets controller while the
+        // Activity is still being created. Configure bars only after setContentView()
+        // and never let a system-UI quirk prevent the app from starting.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                getWindow().setDecorFitsSystemWindows(false);
+                getWindow().setStatusBarColor(Color.TRANSPARENT);
+                getWindow().setNavigationBarColor(Color.TRANSPARENT);
+
+                View decorView = getWindow().getDecorView();
+                if (decorView != null) {
+                    WindowInsetsController controller = decorView.getWindowInsetsController();
+                    if (controller != null) {
+                        int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                        controller.setSystemBarsAppearance(darkMode ? 0 : mask, mask);
+                    }
                 }
-                getWindow().getDecorView().setSystemUiVisibility(flags);
+            } else {
+                getWindow().setStatusBarColor(surfaceColor);
+                getWindow().setNavigationBarColor(surfaceColor);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    View decorView = getWindow().getDecorView();
+                    if (decorView != null) {
+                        int flags = darkMode ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                        if (!darkMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                        }
+                        decorView.setSystemUiVisibility(flags);
+                    }
+                }
+            }
+        } catch (Throwable systemUiError) {
+            Log.w(TAG, "System bar configuration failed; continuing with safe defaults", systemUiError);
+            try {
+                getWindow().setStatusBarColor(surfaceColor);
+                getWindow().setNavigationBarColor(surfaceColor);
+            } catch (Throwable ignored) {
+                // System bars are cosmetic; startup must continue.
             }
         }
     }
