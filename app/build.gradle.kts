@@ -9,6 +9,7 @@ val releaseRequested = gradle.startParameter.taskNames.any { it.contains("Releas
 val admobAppId = providers.gradleProperty("ADMOB_APP_ID").orNull
 val admobBannerId = providers.gradleProperty("ADMOB_BANNER_ID").orNull
 val documentsApiUrl = providers.gradleProperty("DOCUMENTS_API_URL").orElse("").get()
+val marketplaceApiUrl = providers.gradleProperty("MARKETPLACE_API_URL").orElse("").get()
 val keystoreFile = providers.gradleProperty("KEYSTORE_FILE").orNull
 val keystorePassword = providers.gradleProperty("KEYSTORE_PASSWORD").orNull
 val keyAliasValue = providers.gradleProperty("KEY_ALIAS").orNull
@@ -33,6 +34,9 @@ if (releaseRequested) {
     if (documentsApiUrl.isBlank()) {
         throw GradleException("Para bundleRelease definí DOCUMENTS_API_URL con la URL del Worker R2.")
     }
+    if (marketplaceApiUrl.isBlank()) {
+        throw GradleException("Para bundleRelease definí MARKETPLACE_API_URL con la URL del Worker Marketplace.")
+    }
 }
 
 android {
@@ -43,11 +47,12 @@ android {
         applicationId = "com.fixhome.soluciona"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "0.6.4"
+        versionCode = 12
+        versionName = "0.8.0"
         manifestPlaceholders["admobAppId"] = "ca-app-pub-3940256099942544~3347511713"
         buildConfigField("String", "ADMOB_BANNER_ID", "\"ca-app-pub-3940256099942544/9214589741\"")
         buildConfigField("String", "DOCUMENTS_API_URL", "\"${documentsApiUrl.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "MARKETPLACE_API_URL", "\"${marketplaceApiUrl.replace("\"", "\\\"")}\"")
     }
 
     signingConfigs {
@@ -79,7 +84,6 @@ android {
         }
     }
 
-
     buildFeatures {
         buildConfig = true
     }
@@ -95,6 +99,7 @@ dependencies {
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
 
+    implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.android.gms:play-services-ads:25.5.0")
     implementation("com.google.android.ump:user-messaging-platform:4.0.0")
 }
