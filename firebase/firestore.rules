@@ -30,10 +30,11 @@ service cloud.firestore {
         && request.resource.data.uid == uid
         && request.resource.data.role in ['CLIENT', 'PROFESSIONAL'];
       allow update: if owner(uid)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['phoneVerified', 'updatedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['updatedAt'])
         && request.resource.data.uid == resource.data.uid
         && request.resource.data.role == resource.data.role
-        && request.resource.data.accountStatus == resource.data.accountStatus;
+        && request.resource.data.accountStatus == resource.data.accountStatus
+        || admin();
       allow delete: if false;
     }
 
@@ -52,9 +53,13 @@ service cloud.firestore {
         && request.resource.data.verificationStatus == 'PENDING_DOCUMENTS'
         && request.resource.data.availability == false;
       allow update: if owner(uid)
-        && resource.data.verificationStatus == 'APPROVED'
+        && request.resource.data.uid == resource.data.uid
         && request.resource.data.verificationStatus == resource.data.verificationStatus
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availability', 'updatedAt']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'availability', 'services', 'zones', 'primaryZone', 'updatedAt'
+        ])
+        && (!request.resource.data.availability || resource.data.verificationStatus == 'APPROVED')
+        || admin();
       allow delete: if false;
     }
 
@@ -90,13 +95,11 @@ service cloud.firestore {
       );
 
       allow update: if signedIn() && (
-        // Cliente: solamente cancelar una solicitud propia.
         (resource.data.clientUid == request.auth.uid
-          && resource.data.status in ['REQUESTED','ACCEPTED','ON_THE_WAY','IN_PROGRESS']
+          && resource.data.status in ['REQUESTED','ACCEPTED','ON_THE_WAY','IN_PROGRESS','AWAITING_PAYMENT','PAYMENT_REVIEW']
           && request.resource.data.status == 'CANCELLED'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','cancelledAt','updatedAt']))
         ||
-        // Profesional: aceptar un pedido libre o dirigido a él.
         (approvedProfessional()
           && resource.data.status == 'REQUESTED'
           && resource.data.professionalUid == null
@@ -105,15 +108,14 @@ service cloud.firestore {
           && request.resource.data.status == 'ACCEPTED'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['professionalUid','status','acceptedAt','updatedAt']))
         ||
-        // Profesional asignado: avanzar por la secuencia operativa.
         (resource.data.professionalUid == request.auth.uid
           && request.resource.data.professionalUid == resource.data.professionalUid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt','completedAt'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])
           && (
             (resource.data.status == 'ACCEPTED' && request.resource.data.status == 'ON_THE_WAY')
             || (resource.data.status == 'ON_THE_WAY' && request.resource.data.status == 'IN_PROGRESS')
-            || (resource.data.status == 'IN_PROGRESS' && request.resource.data.status == 'COMPLETED')
           ))
+        || admin()
       );
       allow delete: if false;
     }
@@ -131,7 +133,8 @@ service cloud.firestore {
         && resource.data.professionalUid == null
         && request.resource.data.professionalUid == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['professionalUid','updatedAt'])
-        && getAfter(/databases/$(database)/documents/service_requests/$(requestId)).data.professionalUid == request.auth.uid;
+        && getAfter(/databases/$(database)/documents/service_requests/$(requestId)).data.professionalUid == request.auth.uid
+        || admin();
       allow delete: if false;
     }
 
