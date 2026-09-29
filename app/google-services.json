@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1010518269428",
+    "project_id": "soluciona-dev",
+    "storage_bucket": "soluciona-dev.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1010518269428:android:20355f9950cd96fd17ada1",
+        "android_client_info": {
+          "package_name": "com.soluciona.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAFYSQjxwlEZzaFNAP0kjpSrK_yYwgXsyQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
