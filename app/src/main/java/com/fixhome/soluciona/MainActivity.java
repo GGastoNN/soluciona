@@ -26,6 +26,8 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.google.firebase.FirebaseApp;
+
 public class MainActivity extends Activity {
     private static final String TAG = "SolucionaStartup";
     private static final int FILE_CHOOSER_REQUEST = 1001;
@@ -40,6 +42,7 @@ public class MainActivity extends Activity {
     private View splashView;
     private long splashStartedAt;
     private boolean pageReady;
+    private String startupDiagnostic = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -61,19 +64,29 @@ public class MainActivity extends Activity {
             initializeServicesSafely();
 
             if (bridge == null) {
-                showStartupError("No se pudo conectar con Firebase. Revisá la configuración de la aplicación.");
+                showStartupError(
+                        "No se pudo conectar con Firebase. Verificá que google-services.json haya sido descargado desde Firebase para com.fixhome.soluciona.",
+                        "FIREBASE_INIT"
+                );
                 return;
             }
 
             webView.addJavascriptInterface(bridge, "SolucionaNative");
-            if (savedInstanceState == null) {
+            boolean restored = false;
+            if (savedInstanceState != null) {
+                try {
+                    restored = webView.restoreState(savedInstanceState) != null;
+                } catch (Throwable restoreError) {
+                    Log.w(TAG, "WebView state restore failed; loading a fresh page", restoreError);
+                }
+            }
+            if (!restored) {
                 webView.loadUrl("file:///android_asset/index.html");
-            } else {
-                webView.restoreState(savedInstanceState);
             }
         } catch (Throwable t) {
             Log.e(TAG, "Fatal error during app startup", t);
-            showStartupError("Soluciona no pudo iniciar correctamente. Intentá nuevamente.");
+            startupDiagnostic = diagnosticOf(t);
+            showStartupError("Soluciona no pudo iniciar correctamente. Intentá nuevamente.", "STARTUP_FATAL");
         }
     }
 
@@ -159,6 +172,28 @@ public class MainActivity extends Activity {
     }
 
     private void initializeServicesSafely() {
+        // Firebase is required for accounts and catalog. Initialize it explicitly so a
+        // bad/missing google-services.json becomes a controlled startup error instead
+        // of an unexplained crash or a permanently stuck splash screen.
+        try {
+            FirebaseApp firebaseApp;
+            if (FirebaseApp.getApps(this).isEmpty()) {
+                firebaseApp = FirebaseApp.initializeApp(this);
+            } else {
+                firebaseApp = FirebaseApp.getInstance();
+            }
+            if (firebaseApp == null) {
+                throw new IllegalStateException("FirebaseApp.initializeApp returned null");
+            }
+            Log.i(TAG, "Firebase ready: project=" + firebaseApp.getOptions().getProjectId());
+        } catch (Throwable firebaseAppError) {
+            startupDiagnostic = diagnosticOf(firebaseAppError);
+            Log.e(TAG, "FirebaseApp initialization failed", firebaseAppError);
+            bridge = null;
+            return;
+        }
+
+        // Advertising must never prevent the core app from starting.
         try {
             adsManager = new AdsManager(this, adContainer);
         } catch (Throwable adError) {
@@ -170,7 +205,8 @@ public class MainActivity extends Activity {
         try {
             bridge = new FirebaseBridge(this, webView, adsManager);
         } catch (Throwable firebaseError) {
-            Log.e(TAG, "Firebase initialization failed", firebaseError);
+            startupDiagnostic = diagnosticOf(firebaseError);
+            Log.e(TAG, "Firebase bridge initialization failed", firebaseError);
             bridge = null;
         }
     }
@@ -360,7 +396,7 @@ public class MainActivity extends Activity {
         }, 250L);
     }
 
-    private void showStartupError(String message) {
+    private void showStartupError(String message, String code) {
         if (root == null) {
             root = new FrameLayout(this);
             setContentView(root);
@@ -391,7 +427,12 @@ public class MainActivity extends Activity {
         box.addView(title);
 
         TextView detail = new TextView(this);
-        detail.setText(message + "\n\nSoporte: infosoluciona2026@gmail.com");
+        String visibleDetail = message + "\n\nCódigo: " + code;
+        if (BuildConfig.DEBUG && startupDiagnostic != null && !startupDiagnostic.isEmpty()) {
+            visibleDetail += "\n\nDiagnóstico: " + startupDiagnostic;
+        }
+        visibleDetail += "\n\nSoporte: infosoluciona2026@gmail.com";
+        detail.setText(visibleDetail);
         detail.setTextColor(Color.rgb(100, 116, 139));
         detail.setTextSize(14);
         detail.setGravity(Gravity.CENTER);
@@ -405,7 +446,7 @@ public class MainActivity extends Activity {
 
         Button retry = new Button(this);
         retry.setText("Reintentar");
-        retry.setOnClickListener(v -> recreate());
+        retry.setOnClickListener(v -> restartFresh());
         box.addView(retry, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(52)
@@ -421,13 +462,33 @@ public class MainActivity extends Activity {
         applySystemBarInsets(root);
     }
 
+    private void restartFresh() {
+        // recreate() preserves an empty WebView state after a failed startup. That was
+        // the reason the retry could remain forever on the logo. Start a clean Activity.
+        Intent restart = new Intent(this, MainActivity.class);
+        restart.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
+        finish();
+        startActivity(restart);
+        overridePendingTransition(0, 0);
+    }
+
+    private static String diagnosticOf(Throwable t) {
+        if (t == null) return "";
+        String name = t.getClass().getSimpleName();
+        String message = t.getMessage();
+        if (message == null) message = "";
+        message = message.replace('\n', ' ').replace('\r', ' ').trim();
+        if (message.length() > 220) message = message.substring(0, 220);
+        return message.isEmpty() ? name : name + ": " + message;
+    }
+
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        if (webView != null) webView.saveState(outState);
+        if (pageReady && webView != null) webView.saveState(outState);
         super.onSaveInstanceState(outState);
     }
 
