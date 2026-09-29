@@ -1,33 +1,43 @@
-# Soluciona. · Beta 0.4.0
+# Soluciona 0.6.0 — Play Release Candidate
 
-Versión de prueba basada en el branding aprobado y el último prototipo funcional revisado con socios.
+Base Android preparada para dejar atrás las cuentas demo y operar con usuarios reales en Firebase Authentication + Cloud Firestore.
 
-## Nuevas funciones
+## Incluye
 
-- Branding Soluciona con splash, icono, navegación inferior y UI móvil.
-- Descripción del problema con sugerencia automática de rubro.
-- Detección local de riesgos de gas, electricidad e inundación.
-- Botón destacado de emergencia y priorización por cercanía.
-- Disponibilidad por rubro: las categorías sin profesionales aparecen deshabilitadas.
-- Listado de profesionales por categoría, cercanía, puntuación y precio.
-- Flujo de solicitud, seguimiento, chat y reportes.
-- Calificación de 1 a 5 estrellas únicamente al finalizar un trabajo.
-- Comentarios/reseñas vinculados a cada servicio finalizado.
-- La puntuación local del profesional refleja las reseñas creadas en la beta.
-- Alta profesional local con rubros, zona, matrícula, antecedentes y seguro RC.
-- Un profesional dado de alta localmente puede habilitar un rubro sin oferta.
-- Estados documentales `EN REVISIÓN` hasta que exista validación real.
-- Política de privacidad y términos en modo borrador/beta.
-- Pagos, geolocalización y verificaciones siguen siendo simulados: no hay Firebase ni dinero real.
+- Registro real de cliente: nombre, email, teléfono, contraseña y dirección.
+- Registro real de profesional: mismos datos + servicios, zona y matrícula/habilitación declarada.
+- Verificación de email real con Firebase Authentication.
+- Verificación de teléfono por SMS real con Firebase Phone Auth.
+- Recuperación de contraseña.
+- Catálogo de zonas y rubros desde Firestore.
+- Profesionales visibles solo si `verificationStatus == APPROVED` y `availability == true`.
+- Solicitudes reales en Firestore, con dirección separada en `service_request_private`.
+- Flujo profesional: pedido -> aceptado -> en camino -> en trabajo -> finalizado.
+- Chat básico real en Firestore una vez aceptada la solicitud.
+- AdMob banner inferior adaptable.
+- UMP (User Messaging Platform) para consentimiento de publicidad.
+- Target SDK 36 / Compile SDK 36.
+- Workflow GitHub Actions para APK debug y AAB firmado de Play Console.
+- R8/minificación en release.
 
-## Compilación
+## Importante antes de producción pública
 
-El workflow `.github/workflows/android.yml` genera:
+Este proyecto trae `google-services.json` de `soluciona-dev`, útil para pruebas reales e Internal Testing. Para producción pública reemplazarlo por el archivo del proyecto Firebase `soluciona-prod`.
 
-`Soluciona-0.4.0-socio-debug.apk`
+El build `release` NO se genera si faltan IDs reales de AdMob o la upload key. Esto evita publicar accidentalmente anuncios de prueba.
 
-Usa JDK 17, Gradle 8.7 y Android SDK 34.
+## Build debug
 
-## Importante
+El workflow `.github/workflows/android-ci.yml` genera `Soluciona-0.6.0-debug.apk` usando IDs de anuncio de prueba de Google.
 
-No agregar archivos `.md`, `.txt` u otros formatos dentro de `app/src/main/res/drawable*`. Android solo admite recursos compatibles en esas carpetas. La documentación debe permanecer fuera de `res/`.
+## Build Play Console
+
+El workflow `.github/workflows/play-release.yml` genera:
+
+`Soluciona-0.6.0-play.aab`
+
+Requiere los secretos GitHub descriptos en `PLAY_CONSOLE_CHECKLIST.md`.
+
+## Estado del backend documental
+
+La app ya separa la verificación profesional de la visibilidad pública. La carga privada de matrícula/antecedentes/seguro debe conectarse al Worker R2 antes de aprobar profesionales a escala. Mientras tanto, la operación puede gestionar documentación manualmente desde administración y mantener los perfiles en `PENDING_DOCUMENTS` / `PENDING_REVIEW`.
