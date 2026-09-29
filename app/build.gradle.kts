@@ -14,9 +14,18 @@ val keystorePassword = providers.gradleProperty("KEYSTORE_PASSWORD").orNull
 val keyAliasValue = providers.gradleProperty("KEY_ALIAS").orNull
 val keyPasswordValue = providers.gradleProperty("KEY_PASSWORD").orNull
 
+fun validAdMobAppId(value: String?): Boolean =
+    value != null && Regex("^ca-app-pub-[0-9]+~[0-9]+$").matches(value.trim())
+
+fun validAdMobBannerId(value: String?): Boolean =
+    value != null && Regex("^ca-app-pub-[0-9]+/[0-9]+$").matches(value.trim())
+
 if (releaseRequested) {
-    if (admobAppId.isNullOrBlank() || admobBannerId.isNullOrBlank()) {
-        throw GradleException("Para bundleRelease definí ADMOB_APP_ID y ADMOB_BANNER_ID.")
+    if (!validAdMobAppId(admobAppId)) {
+        throw GradleException("ADMOB_APP_ID inválido. Debe tener formato ca-app-pub-...~... (con ~, no /).")
+    }
+    if (!validAdMobBannerId(admobBannerId)) {
+        throw GradleException("ADMOB_BANNER_ID inválido. Debe tener formato ca-app-pub-.../... (con /, no ~).")
     }
     if (keystoreFile.isNullOrBlank() || keystorePassword.isNullOrBlank() || keyAliasValue.isNullOrBlank() || keyPasswordValue.isNullOrBlank()) {
         throw GradleException("Para bundleRelease definí KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS y KEY_PASSWORD.")
@@ -27,15 +36,15 @@ if (releaseRequested) {
 }
 
 android {
-    namespace = "com.soluciona.app"
+    namespace = "com.fixhome.soluciona"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.soluciona.app"
+        applicationId = "com.fixhome.soluciona"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.6.1"
+        versionCode = 8
+        versionName = "0.6.2"
         manifestPlaceholders["admobAppId"] = "ca-app-pub-3940256099942544~3347511713"
         buildConfigField("String", "ADMOB_BANNER_ID", "\"ca-app-pub-3940256099942544/9214589741\"")
         buildConfigField("String", "DOCUMENTS_API_URL", "\"${documentsApiUrl.replace("\"", "\\\"")}\"")
@@ -62,11 +71,19 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            manifestPlaceholders["admobAppId"] = admobAppId ?: ""
-            buildConfigField("String", "ADMOB_BANNER_ID", "\"${(admobBannerId ?: "").replace("\"", "\\\"")}\"")
+            manifestPlaceholders["admobAppId"] = admobAppId?.trim() ?: ""
+            buildConfigField("String", "ADMOB_BANNER_ID", "\"${(admobBannerId?.trim() ?: "").replace("\"", "\\\"")}\"")
             if (signingConfigs.findByName("release") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+    }
+
+    // If old com.soluciona.app sources are still present in GitHub after a manual upload,
+    // exclude them so they cannot be compiled into the new package.
+    sourceSets {
+        getByName("main") {
+            java.exclude("com/soluciona/app/**")
         }
     }
 

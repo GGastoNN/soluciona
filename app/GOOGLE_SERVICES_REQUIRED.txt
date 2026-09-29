@@ -1,0 +1,1 @@
+Descargar desde Firebase el google-services.json de la app Android com.fixhome.soluciona y guardarlo en esta carpeta con nombre exacto google-services.json.
