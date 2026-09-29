@@ -1,6 +1,5 @@
 package com.fixhome.soluciona;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -26,66 +25,98 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import com.google.firebase.FirebaseApp;
+import androidx.fragment.app.FragmentActivity;
 
-public class MainActivity extends Activity {
+import com.google.firebase.FirebaseApp;
+import com.google.firebase.auth.FirebaseAuth;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+
+public class MainActivity extends FragmentActivity {
     private static final String TAG = "SolucionaStartup";
     private static final int FILE_CHOOSER_REQUEST = 1001;
-    private static final long MIN_SPLASH_MS = 1100L;
+    private static final long MIN_SPLASH_MS = 950L;
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
     private AdsManager adsManager;
     private FirebaseBridge bridge;
+    private FeaturesBridge featuresBridge;
     private FrameLayout root;
     private FrameLayout adContainer;
     private View splashView;
     private long splashStartedAt;
     private boolean pageReady;
+    private boolean enhancementsInjected;
     private String startupDiagnostic = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        // Apply the normal app theme immediately after the Android launch preview.
-        setTheme(com.fixhome.soluciona.R.style.Theme_Soluciona);
+        setTheme(R.style.Theme_Soluciona);
         super.onCreate(savedInstanceState);
 
         splashStartedAt = SystemClock.uptimeMillis();
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
-        final boolean darkMode = (getResources().getConfiguration().uiMode
-                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-        final int surfaceColor = darkMode ? Color.rgb(15, 23, 42) : Color.rgb(244, 247, 252);
-
         try {
+            boolean darkMode = resolveDarkMode();
+            int surfaceColor = surfaceColor(darkMode);
             buildUi(darkMode, surfaceColor);
             configureWebView();
             initializeServicesSafely();
 
-            if (bridge == null) {
+            if (bridge == null || featuresBridge == null) {
                 showStartupError(
-                        "No se pudo conectar con Firebase. Verificá que google-services.json haya sido descargado desde Firebase para com.fixhome.soluciona.",
-                        "FIREBASE_INIT"
+                        "No se pudo conectar con los servicios de Soluciona. Revisá la configuración de Firebase.",
+                        "SERVICES_INIT"
                 );
                 return;
             }
 
             webView.addJavascriptInterface(bridge, "SolucionaNative");
-            boolean restored = false;
-            if (savedInstanceState != null) {
-                try {
-                    restored = webView.restoreState(savedInstanceState) != null;
-                } catch (Throwable restoreError) {
-                    Log.w(TAG, "WebView state restore failed; loading a fresh page", restoreError);
+            webView.addJavascriptInterface(featuresBridge, "SolucionaFeatures");
+
+            Runnable openApp = () -> loadOrRestore(savedInstanceState);
+
+            boolean signedIn = FirebaseAuth.getInstance().getCurrentUser() != null;
+            boolean biometricEnabled = signedIn && featuresBridge.isBiometricEnabledForCurrentUser();
+            if (biometricEnabled) {
+                if (featuresBridge.canAuthenticateBiometric()) {
+                    featuresBridge.authenticateForStartup(
+                            openApp,
+                            () -> {
+                                FirebaseAuth.getInstance().signOut();
+                                loadOrRestore(null);
+                            }
+                    );
+                } else {
+                    // If biometrics were enabled and later removed/disabled, never bypass the gate.
+                    FirebaseAuth.getInstance().signOut();
+                    loadOrRestore(null);
                 }
-            }
-            if (!restored) {
-                webView.loadUrl("file:///android_asset/index.html");
+            } else {
+                openApp.run();
             }
         } catch (Throwable t) {
             Log.e(TAG, "Fatal error during app startup", t);
             startupDiagnostic = diagnosticOf(t);
             showStartupError("Soluciona no pudo iniciar correctamente. Intentá nuevamente.", "STARTUP_FATAL");
+        }
+    }
+
+    private void loadOrRestore(Bundle savedInstanceState) {
+        boolean restored = false;
+        if (savedInstanceState != null) {
+            try {
+                restored = webView.restoreState(savedInstanceState) != null;
+            } catch (Throwable restoreError) {
+                Log.w(TAG, "WebView state restore failed; loading a fresh page", restoreError);
+            }
+        }
+        if (!restored) {
+            webView.loadUrl("file:///android_asset/index.html");
         }
     }
 
@@ -151,10 +182,7 @@ public class MainActivity extends Activity {
         name.setTextSize(30);
         name.setGravity(Gravity.CENTER);
         name.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
-        splash.addView(name, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        ));
+        splash.addView(name);
 
         TextView slogan = new TextView(this);
         slogan.setText("Encontrá. Resolvé. Listo.");
@@ -172,9 +200,6 @@ public class MainActivity extends Activity {
     }
 
     private void initializeServicesSafely() {
-        // Firebase is required for accounts and catalog. Initialize it explicitly so a
-        // bad/missing google-services.json becomes a controlled startup error instead
-        // of an unexplained crash or a permanently stuck splash screen.
         try {
             FirebaseApp firebaseApp;
             if (FirebaseApp.getApps(this).isEmpty()) {
@@ -193,7 +218,6 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // Advertising must never prevent the core app from starting.
         try {
             adsManager = new AdsManager(this, adContainer);
         } catch (Throwable adError) {
@@ -204,17 +228,44 @@ public class MainActivity extends Activity {
 
         try {
             bridge = new FirebaseBridge(this, webView, adsManager);
-        } catch (Throwable firebaseError) {
-            startupDiagnostic = diagnosticOf(firebaseError);
-            Log.e(TAG, "Firebase bridge initialization failed", firebaseError);
+            featuresBridge = new FeaturesBridge(this, webView);
+        } catch (Throwable serviceError) {
+            startupDiagnostic = diagnosticOf(serviceError);
+            Log.e(TAG, "Native bridge initialization failed", serviceError);
             bridge = null;
+            featuresBridge = null;
         }
     }
 
+    private boolean resolveDarkMode() {
+        String pref = FeaturesBridge.readThemePreference(this);
+        if ("dark".equals(pref)) return true;
+        if ("light".equals(pref)) return false;
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    private static int surfaceColor(boolean darkMode) {
+        return darkMode ? Color.rgb(15, 23, 42) : Color.rgb(244, 247, 252);
+    }
+
+    void applyThemePreference(String theme) {
+        runOnUiThread(() -> {
+            boolean dark;
+            if ("dark".equals(theme)) dark = true;
+            else if ("light".equals(theme)) dark = false;
+            else dark = (getResources().getConfiguration().uiMode
+                    & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+
+            int surface = surfaceColor(dark);
+            if (root != null) root.setBackgroundColor(surface);
+            if (webView != null) webView.setBackgroundColor(surface);
+            if (adContainer != null) adContainer.setBackgroundColor(dark ? Color.rgb(23, 32, 51) : Color.WHITE);
+            configureSystemBars(dark, surface);
+        });
+    }
+
     private void configureSystemBars(boolean darkMode, int surfaceColor) {
-        // Some OEM Android builds return a null decor/insets controller while the
-        // Activity is still being created. Configure bars only after setContentView()
-        // and never let a system-UI quirk prevent the app from starting.
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 getWindow().setDecorFitsSystemWindows(false);
@@ -245,13 +296,7 @@ public class MainActivity extends Activity {
                 }
             }
         } catch (Throwable systemUiError) {
-            Log.w(TAG, "System bar configuration failed; continuing with safe defaults", systemUiError);
-            try {
-                getWindow().setStatusBarColor(surfaceColor);
-                getWindow().setNavigationBarColor(surfaceColor);
-            } catch (Throwable ignored) {
-                // System bars are cosmetic; startup must continue.
-            }
+            Log.w(TAG, "System bar configuration failed; continuing", systemUiError);
         }
     }
 
@@ -291,12 +336,8 @@ public class MainActivity extends Activity {
                 value -> {
                     boolean handledByApp = "true".equalsIgnoreCase(value);
                     if (handledByApp) return;
-
-                    if (webView.canGoBack()) {
-                        webView.goBack();
-                    } else {
-                        finish();
-                    }
+                    if (webView.canGoBack()) webView.goBack();
+                    else finish();
                 }
         );
     }
@@ -324,6 +365,10 @@ public class MainActivity extends Activity {
                 String scheme = uri.getScheme();
                 if (scheme == null) return false;
                 if ("file".equalsIgnoreCase(scheme) || "about".equalsIgnoreCase(scheme)) return false;
+                if ("soluciona".equalsIgnoreCase(scheme)) {
+                    handleAppDeepLink(uri);
+                    return true;
+                }
                 try {
                     Intent intent;
                     if ("tel".equalsIgnoreCase(scheme)) {
@@ -354,6 +399,7 @@ public class MainActivity extends Activity {
                 super.onPageFinished(view, url);
                 if (url != null && url.startsWith("file:///android_asset/")) {
                     pageReady = true;
+                    injectEnhancements();
                     hideSplashWhenReady();
                     startAdsAfterUiIsVisible();
                 }
@@ -383,6 +429,35 @@ public class MainActivity extends Activity {
                 }
             }
         });
+    }
+
+    private void injectEnhancements() {
+        if (enhancementsInjected || webView == null) return;
+        enhancementsInjected = true;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                getAssets().open("features.js"), StandardCharsets.UTF_8))) {
+            StringBuilder js = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) js.append(line).append('\n');
+            webView.evaluateJavascript(js.toString(), null);
+        } catch (Throwable e) {
+            Log.e(TAG, "Could not inject features.js", e);
+        }
+    }
+
+    private void handleAppDeepLink(Uri uri) {
+        if (uri == null) return;
+        if ("soluciona".equalsIgnoreCase(uri.getScheme())
+                && "mp-connected".equalsIgnoreCase(uri.getHost())) {
+            if (featuresBridge != null) featuresBridge.getMarketplaceStatus();
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null) handleAppDeepLink(intent.getData());
     }
 
     private void hideSplashWhenReady() {
@@ -481,8 +556,6 @@ public class MainActivity extends Activity {
     }
 
     private void restartFresh() {
-        // recreate() preserves an empty WebView state after a failed startup. That was
-        // the reason the retry could remain forever on the logo. Start a clean Activity.
         Intent restart = new Intent(this, MainActivity.class);
         restart.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
         finish();
@@ -563,6 +636,7 @@ public class MainActivity extends Activity {
         if (adsManager != null) adsManager.destroy();
         if (webView != null) {
             webView.removeJavascriptInterface("SolucionaNative");
+            webView.removeJavascriptInterface("SolucionaFeatures");
             webView.destroy();
         }
         super.onDestroy();

@@ -8,13 +8,9 @@ import android.provider.OpenableColumns;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
-import com.google.firebase.FirebaseException;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseAuthException;
 import com.google.firebase.auth.FirebaseUser;
-import com.google.firebase.auth.PhoneAuthCredential;
-import com.google.firebase.auth.PhoneAuthOptions;
-import com.google.firebase.auth.PhoneAuthProvider;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FieldValue;
@@ -46,7 +42,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class FirebaseBridge {
@@ -56,7 +51,6 @@ public final class FirebaseBridge {
     private final FirebaseAuth auth;
     private final FirebaseFirestore db;
     private final AdsManager adsManager;
-    private String pendingVerificationId;
     private String pendingDocumentType;
 
     FirebaseBridge(Activity activity, WebView webView, AdsManager adsManager) {
@@ -159,7 +153,7 @@ public final class FirebaseBridge {
                                 payload.put("emailVerificationSent", true);
                             } catch (JSONException ignored) {}
                             emit(registerEvent(role), true, payload);
-                        });
+                        }, profileError -> rollbackIncompleteRegistration(user, registerEvent(role), profileError));
                     })
                     .addOnFailureListener(activity, e -> emitError(registerEvent(role), e));
         } catch (Exception e) {
@@ -172,14 +166,14 @@ public final class FirebaseBridge {
     }
 
     private void saveProfile(String uid, String role, String name, String email, String phone,
-                             JSONObject source, Runnable onSuccess) {
+                             JSONObject source, Runnable onSuccess,
+                             java.util.function.Consumer<Exception> onFailure) {
         try {
             Map<String, Object> user = new HashMap<>();
             user.put("uid", uid);
             user.put("role", role);
             user.put("displayName", name);
             user.put("accountStatus", "PROFESSIONAL".equals(role) ? "PENDING_REVIEW" : "ACTIVE");
-            user.put("phoneVerified", false);
             user.put("createdAt", FieldValue.serverTimestamp());
             user.put("updatedAt", FieldValue.serverTimestamp());
 
@@ -198,7 +192,9 @@ public final class FirebaseBridge {
                 professional.put("uid", uid);
                 professional.put("displayName", name);
                 professional.put("services", jsonArrayToList(source.optJSONArray("services")));
-                professional.put("zones", jsonArrayToList(source.optJSONArray("zones")));
+                List<String> professionalZones = jsonArrayToList(source.optJSONArray("zones"));
+                professional.put("zones", professionalZones);
+                professional.put("primaryZone", professionalZones.isEmpty() ? "" : professionalZones.get(0));
                 professional.put("availability", false);
                 professional.put("verificationStatus", "PENDING_DOCUMENTS");
                 professional.put("rating", 0.0);
@@ -219,10 +215,23 @@ public final class FirebaseBridge {
 
             batch.commit()
                     .addOnSuccessListener(activity, unused -> onSuccess.run())
-                    .addOnFailureListener(activity, e -> emitError("profileWrite", e));
+                    .addOnFailureListener(activity, onFailure::accept);
         } catch (Exception e) {
-            emitError("profileWrite", e);
+            onFailure.accept(e);
         }
+    }
+
+    private void rollbackIncompleteRegistration(FirebaseUser user, String event, Exception profileError) {
+        // If Firestore profile creation fails after Firebase Auth succeeds, remove the
+        // just-created Auth user so the account cannot remain orphaned.
+        user.delete()
+                .addOnCompleteListener(activity, task -> {
+                    String detail = profileError == null || profileError.getMessage() == null
+                            ? "No se pudo crear el perfil."
+                            : profileError.getMessage();
+                    emitMessage(event, false,
+                            "No pudimos completar el registro. Intentá nuevamente. " + detail);
+                });
     }
 
     @JavascriptInterface
@@ -280,69 +289,6 @@ public final class FirebaseBridge {
                 .addOnFailureListener(activity, e -> emitError("passwordReset", e));
     }
 
-    @JavascriptInterface
-    public void startPhoneVerification(String phone) {
-        FirebaseUser user = auth.getCurrentUser();
-        if (user == null) {
-            emitMessage("phoneVerification", false, "Primero iniciá sesión.");
-            return;
-        }
-        PhoneAuthOptions options = PhoneAuthOptions.newBuilder(auth)
-                .setPhoneNumber(phone)
-                .setTimeout(60L, TimeUnit.SECONDS)
-                .setActivity(activity)
-                .setCallbacks(new PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
-                    @Override
-                    public void onVerificationCompleted(PhoneAuthCredential credential) {
-                        linkPhoneCredential(credential);
-                    }
-
-                    @Override
-                    public void onVerificationFailed(FirebaseException e) {
-                        emitError("phoneVerification", e);
-                    }
-
-                    @Override
-                    public void onCodeSent(String verificationId,
-                                           PhoneAuthProvider.ForceResendingToken token) {
-                        pendingVerificationId = verificationId;
-                        JSONObject payload = new JSONObject();
-                        try { payload.put("codeSent", true); } catch (JSONException ignored) {}
-                        emit("phoneVerification", true, payload);
-                    }
-                })
-                .build();
-        PhoneAuthProvider.verifyPhoneNumber(options);
-    }
-
-    @JavascriptInterface
-    public void confirmPhoneCode(String code) {
-        if (pendingVerificationId == null || pendingVerificationId.isEmpty()) {
-            emitMessage("phoneVerification", false, "Solicitá un nuevo código SMS.");
-            return;
-        }
-        linkPhoneCredential(PhoneAuthProvider.getCredential(pendingVerificationId, code.trim()));
-    }
-
-    private void linkPhoneCredential(PhoneAuthCredential credential) {
-        FirebaseUser user = auth.getCurrentUser();
-        if (user == null) {
-            emitMessage("phoneVerification", false, "No hay una sesión iniciada.");
-            return;
-        }
-        user.linkWithCredential(credential)
-                .addOnSuccessListener(activity, result -> {
-                    Map<String, Object> update = new HashMap<>();
-                    update.put("phoneVerified", true);
-                    update.put("updatedAt", FieldValue.serverTimestamp());
-                    db.collection("users").document(user.getUid()).set(update, SetOptions.merge());
-                    JSONObject payload = new JSONObject();
-                    try { payload.put("phoneVerified", true); } catch (JSONException ignored) {}
-                    emit("phoneVerification", true, payload);
-                })
-                .addOnFailureListener(activity, e -> emitError("phoneVerification", e));
-    }
-
     private void emitProfile(String event) {
         FirebaseUser firebaseUser = auth.getCurrentUser();
         if (firebaseUser == null) {
@@ -383,7 +329,6 @@ public final class FirebaseBridge {
             payload.put("role", string(userDoc.getString("role")));
             payload.put("displayName", string(userDoc.getString("displayName")));
             payload.put("accountStatus", string(userDoc.getString("accountStatus")));
-            payload.put("phoneVerified", Boolean.TRUE.equals(userDoc.getBoolean("phoneVerified")));
             payload.put("phone", string(privateDoc.getString("phone")));
             Object address = privateDoc.get("address");
             payload.put("address", address instanceof Map ? new JSONObject((Map<?, ?>) address) : new JSONObject());
