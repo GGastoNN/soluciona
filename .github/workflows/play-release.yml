@@ -92,17 +92,17 @@ jobs:
       - name: Prepare release artifacts
         shell: bash
         run: |
-          cp app/build/outputs/bundle/release/app-release.aab Soluciona-0.6.3-play.aab
+          cp app/build/outputs/bundle/release/app-release.aab Soluciona-0.6.4-play.aab
           mkdir -p play-artifacts
-          cp Soluciona-0.6.3-play.aab play-artifacts/
+          cp Soluciona-0.6.4-play.aab play-artifacts/
           if [ -f app/build/outputs/mapping/release/mapping.txt ]; then
-            cp app/build/outputs/mapping/release/mapping.txt play-artifacts/mapping-0.6.3.txt
+            cp app/build/outputs/mapping/release/mapping.txt play-artifacts/mapping-0.6.4.txt
           fi
 
       - name: Upload Play artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.6.3-play
+          name: Soluciona-0.6.4-play
           path: play-artifacts/
           if-no-files-found: error
           retention-days: 30
