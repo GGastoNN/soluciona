@@ -1,0 +1,15 @@
+name = "soluciona-marketplace-api"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+FIREBASE_PROJECT_ID = "soluciona-dev"
+COMMISSION_BPS = "1000"
+REFERRAL_PRO_BPS = "500"
+MP_REDIRECT_URI = "https://REEMPLAZAR.workers.dev/v1/mp/callback"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "soluciona-marketplace"
+database_id = "REEMPLAZAR_D1_DATABASE_ID"
