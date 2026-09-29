@@ -2,10 +2,15 @@ package com.soluciona.app;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -26,22 +31,20 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        getWindow().setStatusBarColor(Color.rgb(244, 247, 252));
-        getWindow().setNavigationBarColor(Color.rgb(244, 247, 252));
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            int flags = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
-            }
-            getWindow().getDecorView().setSystemUiVisibility(flags);
-        }
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+
+        final boolean darkMode = (getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        final int surfaceColor = darkMode ? Color.rgb(15, 23, 42) : Color.rgb(244, 247, 252);
+        configureSystemBars(darkMode, surfaceColor);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.rgb(244, 247, 252));
+        root.setBackgroundColor(surfaceColor);
 
         webView = new WebView(this);
-        webView.setBackgroundColor(Color.rgb(244, 247, 252));
+        webView.setBackgroundColor(surfaceColor);
+        webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         root.addView(webView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -49,12 +52,15 @@ public class MainActivity extends Activity {
         ));
 
         FrameLayout adContainer = new FrameLayout(this);
-        adContainer.setBackgroundColor(Color.WHITE);
+        adContainer.setBackgroundColor(darkMode ? Color.rgb(23, 32, 51) : Color.WHITE);
         root.addView(adContainer, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         ));
+
         setContentView(root);
+        applySystemBarInsets(root);
+        registerSystemBackHandler();
 
         configureWebView();
 
@@ -69,6 +75,86 @@ public class MainActivity extends Activity {
         }
 
         adsManager.requestConsentAndLoad();
+    }
+
+    private void configureSystemBars(boolean darkMode, int surfaceColor) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().setStatusBarColor(Color.TRANSPARENT);
+            getWindow().setNavigationBarColor(Color.TRANSPARENT);
+            WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller != null) {
+                int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(darkMode ? 0 : mask, mask);
+            }
+        } else {
+            getWindow().setStatusBarColor(surfaceColor);
+            getWindow().setNavigationBarColor(surfaceColor);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                int flags = darkMode ? 0 : View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                if (!darkMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                }
+                getWindow().getDecorView().setSystemUiVisibility(flags);
+            }
+        }
+    }
+
+    private void applySystemBarInsets(View root) {
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            int left;
+            int top;
+            int right;
+            int bottom;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.graphics.Insets bars = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                left = bars.left;
+                top = bars.top;
+                right = bars.right;
+                bottom = bars.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft();
+                top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+
+            view.setPadding(left, top, right, bottom);
+            return insets;
+        });
+        root.requestApplyInsets();
+    }
+
+    private void registerSystemBackHandler() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    this::handleBackNavigation
+            );
+        }
+    }
+
+    private void handleBackNavigation() {
+        if (webView == null) {
+            finish();
+            return;
+        }
+
+        webView.evaluateJavascript(
+                "(window.solucionaAndroidBack && window.solucionaAndroidBack()) ? true : false",
+                value -> {
+                    boolean handledByApp = "true".equalsIgnoreCase(value);
+                    if (handledByApp) return;
+
+                    if (webView.canGoBack()) {
+                        webView.goBack();
+                    } else {
+                        finish();
+                    }
+                }
+        );
     }
 
     private void configureWebView() {
@@ -184,8 +270,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (webView != null && webView.canGoBack()) webView.goBack();
-        else super.onBackPressed();
+        handleBackNavigation();
     }
 
     @Override
