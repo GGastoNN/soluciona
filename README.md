@@ -1,25 +1,23 @@
-# Worker R2 — documentos profesionales
+# Soluciona 0.8.0
 
-La app 0.6.0 puede subir PDF/JPEG/PNG/WebP directamente a este Worker usando un Firebase ID Token.
+Android marketplace de servicios para el hogar.
 
-Binding R2 requerido:
+## Android
+- package: `com.fixhome.soluciona`
+- minSdk 26 / targetSdk 36
+- Firebase Auth (correo/contraseña) + Firestore
+- biometría opcional
+- tema Sistema / Claro / Oscuro
+- AdMob + UMP
+- zonas dinámicas y múltiples zonas por profesional
+- referidos
+- Mercado Pago Marketplace/QR preparado mediante backend
 
-- `DOCUMENTS` -> bucket privado `soluciona-dev-documents` (o su equivalente de producción)
+## Backends
+- `worker-r2/`: documentos profesionales privados en Cloudflare R2
+- `worker-marketplace/`: OAuth Mercado Pago, D1, QR, comisión y referidos
 
-Variables:
+## Importante
+El ZIP no incluye `app/google-services.json`. Al subir al repo, conservá el archivo actual de Firebase para `com.fixhome.soluciona`.
 
-- `FIREBASE_PROJECT_ID`
-- `MAX_UPLOAD_BYTES` (default recomendado 10485760)
-
-Deploy:
-
-```bash
-npm install
-npx wrangler deploy
-```
-
-Copiá la URL `https://...workers.dev` y guardala como GitHub Actions Variable:
-
-`DOCUMENTS_API_URL`
-
-Para producción cambiá `FIREBASE_PROJECT_ID` y el bucket al proyecto/entorno de producción antes de desplegar.
+Seguí `DEPLOY_0.8.0.md` antes de generar el AAB de Play.
