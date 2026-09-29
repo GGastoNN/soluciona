@@ -33,7 +33,13 @@ jobs:
           if expected not in packages:
               print(f"::error title=Firebase package mismatch::google-services.json contiene {packages or ['sin package']} y debe contener {expected}. Registrá la nueva app Android en Firebase y reemplazá el archivo.")
               sys.exit(1)
-          print(f"Firebase OK: {expected}")
+          matching = next(c for c in data.get("client", []) if c.get("client_info", {}).get("android_client_info", {}).get("package_name") == expected)
+          app_id = matching.get("client_info", {}).get("mobilesdk_app_id", "")
+          legacy_app_id = "1:1010518269428:android:20355f9950cd96fd17ada1"
+          if not app_id or app_id == legacy_app_id:
+              print("::error title=Firebase app ID incorrecto::El archivo parece ser el google-services.json anterior con package_name editado a mano. Registrá com.fixhome.soluciona como una NUEVA app Android en Firebase y descargá su google-services.json real.")
+              sys.exit(1)
+          print(f"Firebase OK: {expected} / {app_id}")
           PY
 
       - name: Set up JDK 17
@@ -86,17 +92,17 @@ jobs:
       - name: Prepare release artifacts
         shell: bash
         run: |
-          cp app/build/outputs/bundle/release/app-release.aab Soluciona-0.6.2-play.aab
+          cp app/build/outputs/bundle/release/app-release.aab Soluciona-0.6.3-play.aab
           mkdir -p play-artifacts
-          cp Soluciona-0.6.2-play.aab play-artifacts/
+          cp Soluciona-0.6.3-play.aab play-artifacts/
           if [ -f app/build/outputs/mapping/release/mapping.txt ]; then
-            cp app/build/outputs/mapping/release/mapping.txt play-artifacts/mapping-0.6.2.txt
+            cp app/build/outputs/mapping/release/mapping.txt play-artifacts/mapping-0.6.3.txt
           fi
 
       - name: Upload Play artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.6.2-play
+          name: Soluciona-0.6.3-play
           path: play-artifacts/
           if-no-files-found: error
           retention-days: 30
