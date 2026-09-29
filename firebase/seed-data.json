@@ -1,0 +1,17 @@
+{
+  "zones": [
+    {"id":"carcarana","name":"Carcarañá","province":"Santa Fe","enabled":true,"sortOrder":10},
+    {"id":"rosario","name":"Rosario","province":"Santa Fe","enabled":true,"sortOrder":20},
+    {"id":"funes","name":"Funes","province":"Santa Fe","enabled":true,"sortOrder":30},
+    {"id":"roldan","name":"Roldán","province":"Santa Fe","enabled":true,"sortOrder":40},
+    {"id":"granadero-baigorria","name":"Granadero Baigorria","province":"Santa Fe","enabled":true,"sortOrder":50}
+  ],
+  "categories": [
+    {"id":"electricidad","name":"Electricidad","enabled":true,"requiresLicense":true,"requiresBackgroundCheck":true,"requiresInsurance":true,"sortOrder":10},
+    {"id":"plomeria","name":"Plomería","enabled":true,"requiresLicense":false,"requiresBackgroundCheck":true,"requiresInsurance":false,"sortOrder":20},
+    {"id":"gas","name":"Gas","enabled":true,"requiresLicense":true,"requiresBackgroundCheck":true,"requiresInsurance":true,"sortOrder":30},
+    {"id":"climatizacion","name":"Climatización","enabled":true,"requiresLicense":false,"requiresBackgroundCheck":true,"requiresInsurance":false,"sortOrder":40},
+    {"id":"cerrajeria","name":"Cerrajería","enabled":true,"requiresLicense":false,"requiresBackgroundCheck":true,"requiresInsurance":false,"sortOrder":50},
+    {"id":"construccion","name":"Construcción","enabled":true,"requiresLicense":false,"requiresBackgroundCheck":true,"requiresInsurance":true,"sortOrder":60}
+  ]
+}

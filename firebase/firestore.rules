@@ -1,0 +1,192 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function owner(uid) { return signedIn() && request.auth.uid == uid; }
+    function emailVerified() { return signedIn() && request.auth.token.email_verified == true; }
+    function admin() { return signedIn() && request.auth.token.admin == true; }
+    function userRole() {
+      return signedIn() ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role : null;
+    }
+    function approvedProfessional() {
+      return signedIn()
+        && userRole() == 'PROFESSIONAL'
+        && get(/databases/$(database)/documents/professionals/$(request.auth.uid)).data.verificationStatus == 'APPROVED';
+    }
+
+    match /zones/{zoneId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    match /users/{uid} {
+      allow read: if owner(uid) || admin();
+      allow create: if owner(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.role in ['CLIENT', 'PROFESSIONAL'];
+      allow update: if owner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['phoneVerified', 'updatedAt'])
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.accountStatus == resource.data.accountStatus;
+      allow delete: if false;
+    }
+
+    match /users_private/{uid} {
+      allow read, create: if owner(uid) || admin();
+      allow update: if owner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['phone', 'address', 'updatedAt'])
+        || admin();
+      allow delete: if false;
+    }
+
+    match /professionals/{uid} {
+      allow read: if (signedIn() && resource.data.verificationStatus == 'APPROVED') || owner(uid) || admin();
+      allow create: if owner(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.verificationStatus == 'PENDING_DOCUMENTS'
+        && request.resource.data.availability == false;
+      allow update: if owner(uid)
+        && resource.data.verificationStatus == 'APPROVED'
+        && request.resource.data.verificationStatus == resource.data.verificationStatus
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availability', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /professional_private/{uid} {
+      allow read, create: if owner(uid) || admin();
+      allow update: if owner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'licenseNumber', 'licenseJurisdiction', 'backgroundCheckStatus', 'insuranceStatus', 'updatedAt'
+        ]) || admin();
+      allow delete: if false;
+    }
+
+    match /professional_documents/{docId} {
+      allow read: if signedIn() && (resource.data.professionalUid == request.auth.uid || admin());
+      allow create: if emailVerified()
+        && request.resource.data.professionalUid == request.auth.uid
+        && request.resource.data.status == 'PENDING';
+      allow update, delete: if false;
+    }
+
+    match /service_requests/{requestId} {
+      allow create: if emailVerified()
+        && userRole() == 'CLIENT'
+        && request.resource.data.clientUid == request.auth.uid
+        && request.resource.data.professionalUid == null
+        && request.resource.data.status == 'REQUESTED';
+
+      allow read: if signedIn() && (
+        resource.data.clientUid == request.auth.uid
+        || resource.data.professionalUid == request.auth.uid
+        || admin()
+        || (approvedProfessional() && resource.data.status == 'REQUESTED')
+      );
+
+      allow update: if signedIn() && (
+        // Cliente: solamente cancelar una solicitud propia.
+        (resource.data.clientUid == request.auth.uid
+          && resource.data.status in ['REQUESTED','ACCEPTED','ON_THE_WAY','IN_PROGRESS']
+          && request.resource.data.status == 'CANCELLED'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','cancelledAt','updatedAt']))
+        ||
+        // Profesional: aceptar un pedido libre o dirigido a él.
+        (approvedProfessional()
+          && resource.data.status == 'REQUESTED'
+          && resource.data.professionalUid == null
+          && (resource.data.preferredProfessionalUid == null || resource.data.preferredProfessionalUid == request.auth.uid)
+          && request.resource.data.professionalUid == request.auth.uid
+          && request.resource.data.status == 'ACCEPTED'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['professionalUid','status','acceptedAt','updatedAt']))
+        ||
+        // Profesional asignado: avanzar por la secuencia operativa.
+        (resource.data.professionalUid == request.auth.uid
+          && request.resource.data.professionalUid == resource.data.professionalUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt','completedAt'])
+          && (
+            (resource.data.status == 'ACCEPTED' && request.resource.data.status == 'ON_THE_WAY')
+            || (resource.data.status == 'ON_THE_WAY' && request.resource.data.status == 'IN_PROGRESS')
+            || (resource.data.status == 'IN_PROGRESS' && request.resource.data.status == 'COMPLETED')
+          ))
+      );
+      allow delete: if false;
+    }
+
+    match /service_request_private/{requestId} {
+      allow create: if emailVerified()
+        && request.resource.data.clientUid == request.auth.uid
+        && request.resource.data.professionalUid == null;
+      allow read: if signedIn() && (
+        resource.data.clientUid == request.auth.uid
+        || resource.data.professionalUid == request.auth.uid
+        || admin()
+      );
+      allow update: if signedIn()
+        && resource.data.professionalUid == null
+        && request.resource.data.professionalUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['professionalUid','updatedAt'])
+        && getAfter(/databases/$(database)/documents/service_requests/$(requestId)).data.professionalUid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /chats/{chatId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.members;
+      allow create: if signedIn()
+        && request.auth.uid in request.resource.data.members
+        && get(/databases/$(database)/documents/service_requests/$(chatId)).data.professionalUid == request.auth.uid;
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.members
+        && request.resource.data.members == resource.data.members
+        && request.resource.data.requestId == resource.data.requestId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage','updatedAt']);
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+        allow create: if signedIn()
+          && request.resource.data.senderUid == request.auth.uid
+          && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.members
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 1000;
+        allow update, delete: if false;
+      }
+    }
+
+    match /reviews/{reviewId} {
+      allow read: if signedIn();
+      allow create: if emailVerified()
+        && request.resource.data.clientUid == request.auth.uid
+        && get(/databases/$(database)/documents/service_requests/$(request.resource.data.requestId)).data.clientUid == request.auth.uid
+        && get(/databases/$(database)/documents/service_requests/$(request.resource.data.requestId)).data.status == 'COMPLETED';
+      allow update: if signedIn()
+        && resource.data.clientUid == request.auth.uid
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.requestId == resource.data.requestId;
+      allow delete: if false;
+    }
+
+    match /reports/{reportId} {
+      allow create: if signedIn() && request.resource.data.reporterUid == request.auth.uid;
+      allow read: if signedIn() && (resource.data.reporterUid == request.auth.uid || admin());
+      allow update, delete: if false;
+    }
+
+    match /admin_audit/{auditId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+
+    match /stats_daily/{docId} {
+      allow read: if admin();
+      allow write: if false;
+    }
+  }
+}
