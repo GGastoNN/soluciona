@@ -65,12 +65,12 @@ jobs:
         run: gradle --no-daemon :app:assembleDebug
 
       - name: Copy APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.8.0-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.8.1-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.8.0-debug
-          path: Soluciona-0.8.0-debug.apk
+          name: Soluciona-0.8.1-debug
+          path: Soluciona-0.8.1-debug.apk
           if-no-files-found: error
           retention-days: 14
