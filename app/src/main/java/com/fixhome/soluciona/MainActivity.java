@@ -50,6 +50,7 @@ public class MainActivity extends FragmentActivity {
     private long splashStartedAt;
     private boolean pageReady;
     private boolean enhancementsInjected;
+    private boolean expectSessionForPage;
     private String startupDiagnostic = "";
 
     @Override
@@ -113,6 +114,7 @@ public class MainActivity extends FragmentActivity {
 
     private void loadFreshApp(boolean expectSession) {
         if (webView == null) return;
+        expectSessionForPage = expectSession;
         pageReady = false;
         enhancementsInjected = false;
         try {
@@ -410,9 +412,18 @@ public class MainActivity extends FragmentActivity {
                     pageReady = true;
                     injectEnhancements();
 
-                    // Retry the Firebase session once from native code after the page is
-                    // fully attached. This closes a small race after biometric unlock.
-                    if (bridge != null && FirebaseAuth.getInstance().getCurrentUser() != null) {
+                    if (!expectSessionForPage) {
+                        // Hard native fail-safe for a signed-out/clean launch. Even if a
+                        // WebView URL query is lost or JavaScript startup order changes,
+                        // the public Welcome screen wins and the app can never remain on
+                        // "Conectando con Soluciona…" without a Firebase session.
+                        view.post(() -> view.evaluateJavascript(
+                                "(function(){try{if(typeof state!=='undefined'&&typeof render==='function'){state.profile=null;if(typeof backStack!=='undefined')backStack.length=0;state.screen='welcome';render();}}catch(e){}})();",
+                                null
+                        ));
+                    } else if (bridge != null && FirebaseAuth.getInstance().getCurrentUser() != null) {
+                        // Retry the persisted Firebase session once after the page is
+                        // fully attached. This closes the biometric/resume race.
                         view.postDelayed(() -> {
                             if (bridge != null) bridge.refreshSession();
                         }, 350L);
