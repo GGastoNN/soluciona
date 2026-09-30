@@ -78,7 +78,11 @@ public class MainActivity extends FragmentActivity {
             webView.addJavascriptInterface(bridge, "SolucionaNative");
             webView.addJavascriptInterface(featuresBridge, "SolucionaFeatures");
 
-            Runnable openApp = () -> loadOrRestore(savedInstanceState);
+            // The WebView must always be bootstrapped from a fresh local page after the
+            // biometric gate. Restoring an Android WebView snapshot can restore the HTML
+            // while leaving the JavaScript/native bridge bootstrap in the previous
+            // "loading" state, which is exactly what caused the post-biometric freeze.
+            Runnable openApp = this::loadFreshApp;
 
             boolean signedIn = FirebaseAuth.getInstance().getCurrentUser() != null;
             boolean biometricEnabled = signedIn && featuresBridge.isBiometricEnabledForCurrentUser();
@@ -88,13 +92,13 @@ public class MainActivity extends FragmentActivity {
                             openApp,
                             () -> {
                                 FirebaseAuth.getInstance().signOut();
-                                loadOrRestore(null);
+                                loadFreshApp();
                             }
                     );
                 } else {
                     // If biometrics were enabled and later removed/disabled, never bypass the gate.
                     FirebaseAuth.getInstance().signOut();
-                    loadOrRestore(null);
+                    loadFreshApp();
                 }
             } else {
                 openApp.run();
@@ -106,18 +110,17 @@ public class MainActivity extends FragmentActivity {
         }
     }
 
-    private void loadOrRestore(Bundle savedInstanceState) {
-        boolean restored = false;
-        if (savedInstanceState != null) {
-            try {
-                restored = webView.restoreState(savedInstanceState) != null;
-            } catch (Throwable restoreError) {
-                Log.w(TAG, "WebView state restore failed; loading a fresh page", restoreError);
-            }
+    private void loadFreshApp() {
+        if (webView == null) return;
+        pageReady = false;
+        enhancementsInjected = false;
+        try {
+            webView.stopLoading();
+            webView.clearHistory();
+        } catch (Throwable ignored) {
+            // A fresh asset load below is the source of truth for app state.
         }
-        if (!restored) {
-            webView.loadUrl("file:///android_asset/index.html");
-        }
+        webView.loadUrl("file:///android_asset/index.html");
     }
 
     private void buildUi(boolean darkMode, int surfaceColor) {
@@ -579,7 +582,9 @@ public class MainActivity extends FragmentActivity {
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {
-        if (pageReady && webView != null) webView.saveState(outState);
+        // Do not persist WebView execution state. Soluciona reconstructs its screen from
+        // Firebase/Firestore after the biometric gate; persisting the WebView can leave
+        // a restored page stuck on "Conectando con Soluciona…" without re-running boot.
         super.onSaveInstanceState(outState);
     }
 
