@@ -82,26 +82,27 @@ public class MainActivity extends FragmentActivity {
             // biometric gate. Restoring an Android WebView snapshot can restore the HTML
             // while leaving the JavaScript/native bridge bootstrap in the previous
             // "loading" state, which is exactly what caused the post-biometric freeze.
-            Runnable openApp = this::loadFreshApp;
-
             boolean signedIn = FirebaseAuth.getInstance().getCurrentUser() != null;
             boolean biometricEnabled = signedIn && featuresBridge.isBiometricEnabledForCurrentUser();
+
             if (biometricEnabled) {
                 if (featuresBridge.canAuthenticateBiometric()) {
                     featuresBridge.authenticateForStartup(
-                            openApp,
+                            () -> loadFreshApp(true),
                             () -> {
                                 FirebaseAuth.getInstance().signOut();
-                                loadFreshApp();
+                                loadFreshApp(false);
                             }
                     );
                 } else {
                     // If biometrics were enabled and later removed/disabled, never bypass the gate.
                     FirebaseAuth.getInstance().signOut();
-                    loadFreshApp();
+                    loadFreshApp(false);
                 }
             } else {
-                openApp.run();
+                // Native Firebase state is the startup source of truth.
+                // A clean install has signedIn=false and opens Welcome immediately.
+                loadFreshApp(signedIn);
             }
         } catch (Throwable t) {
             Log.e(TAG, "Fatal error during app startup", t);
@@ -110,7 +111,7 @@ public class MainActivity extends FragmentActivity {
         }
     }
 
-    private void loadFreshApp() {
+    private void loadFreshApp(boolean expectSession) {
         if (webView == null) return;
         pageReady = false;
         enhancementsInjected = false;
@@ -120,7 +121,12 @@ public class MainActivity extends FragmentActivity {
         } catch (Throwable ignored) {
             // A fresh asset load below is the source of truth for app state.
         }
-        webView.loadUrl("file:///android_asset/index.html");
+
+        // Do not ask JavaScript to discover Firebase startup state through a
+        // synchronous bridge call. Native code already knows whether Firebase has
+        // a persisted user, so pass that state explicitly to the local page.
+        String sessionFlag = expectSession ? "1" : "0";
+        webView.loadUrl("file:///android_asset/index.html?session=" + sessionFlag);
     }
 
     private void buildUi(boolean darkMode, int surfaceColor) {
