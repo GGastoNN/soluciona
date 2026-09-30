@@ -66,6 +66,19 @@ public final class FirebaseBridge {
         return true;
     }
 
+    /**
+     * Synchronous startup hint for the local WebView.
+     *
+     * This does not authenticate the user and does not replace refreshSession().
+     * It only lets index.html choose between the public welcome screen and the
+     * authenticated-session loading flow without waiting for an asynchronous
+     * NO_SESSION callback.
+     */
+    @JavascriptInterface
+    public boolean hasSession() {
+        return auth.getCurrentUser() != null;
+    }
+
     @JavascriptInterface
     public void loadCatalog() {
         db.collection("zones").whereEqualTo("enabled", true).get()
