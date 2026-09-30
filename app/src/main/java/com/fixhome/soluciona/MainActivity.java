@@ -403,6 +403,15 @@ public class MainActivity extends FragmentActivity {
                 if (url != null && url.startsWith("file:///android_asset/")) {
                     pageReady = true;
                     injectEnhancements();
+
+                    // Retry the Firebase session once from native code after the page is
+                    // fully attached. This closes a small race after biometric unlock.
+                    if (bridge != null && FirebaseAuth.getInstance().getCurrentUser() != null) {
+                        view.postDelayed(() -> {
+                            if (bridge != null) bridge.refreshSession();
+                        }, 350L);
+                    }
+
                     hideSplashWhenReady();
                     startAdsAfterUiIsVisible();
                 }
