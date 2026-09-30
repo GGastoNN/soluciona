@@ -84,13 +84,16 @@ if(!N||!N.isAvailable||!N.isAvailable()){
 document.getElementById('screen').innerHTML='<div class="empty">Esta versión necesita ejecutarse desde la app Android.</div>'
 }else{
 N.loadCatalog();
-const hasStoredSession=typeof N.hasSession==='function'&&N.hasSession();
-if(!hasStoredSession){
+const startupSession=new URLSearchParams(window.location.search).get('session')==='1';
+if(!startupSession){
+  // Clean install / signed-out launch: never enter the session loader.
   state.profile=null;
   backStack.length=0;
   state.screen='welcome';
   render();
 }else{
+  // Only a launch that native Firebase identified as having a persisted user
+  // is allowed to show "Conectando con Soluciona…".
   state.screen='loading';
   render();
   N.refreshSession();
