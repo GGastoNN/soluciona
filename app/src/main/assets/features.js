@@ -79,6 +79,13 @@
 
   window.solucionaFeaturesEvent = (event, ok, payload={}) => {
     if (!ok) {
+      // During biometric resume, auxiliary feature calls can briefly arrive before
+      // Firebase Auth finishes restoring the persisted user. Do not expose that
+      // transient race as a raw NO_SESSION error.
+      if (payload.message === 'NO_SESSION' &&
+          ['bootstrap','referrals','marketplaceStatus','paymentStatus'].includes(event)) {
+        return;
+      }
       featureToast(payload.message || 'No se pudo completar la operación.', true);
       return;
     }
@@ -448,12 +455,9 @@
   observer.observe(document.body, {subtree:true, childList:true});
 
   applyTheme(extra.settings.theme);
+  // Only unauthenticated-safe calls run immediately. Authenticated modules are
+  // loaded by the native-event wrapper after session/signIn succeeds.
   F.getSettings();
-  F.getFeatureBootstrap();
   F.loadZones();
   setTimeout(requestRerender, 0);
-  setTimeout(() => {
-    F.getReferralDashboard();
-    if (role() === 'PROFESSIONAL' && extra.settings.marketplaceConfigured) F.getMarketplaceStatus();
-  }, 350);
 })();
