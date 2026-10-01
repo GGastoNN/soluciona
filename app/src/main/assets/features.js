@@ -14,6 +14,26 @@
     payment: null
   };
 
+  let zonesLoadInFlight = false;
+  let zonesLoadedOnce = false;
+
+  function registrationZones() {
+    try {
+      if (extra.zones && extra.zones.length) return extra.zones;
+      if (typeof state !== 'undefined' && Array.isArray(state.zones) && state.zones.length) return state.zones;
+    } catch (_) {}
+    return [];
+  }
+
+  function loadZonesOnce(force=false) {
+    if (zonesLoadInFlight) return;
+    if (zonesLoadedOnce && !force) return;
+    zonesLoadInFlight = true;
+    try { F.loadZones(); }
+    catch (_) { zonesLoadInFlight = false; }
+    setTimeout(() => { zonesLoadInFlight = false; }, 5000);
+  }
+
   const style = document.createElement('style');
   style.textContent = `
     html[data-sol-theme="light"]{
@@ -73,8 +93,28 @@
     try { return state?.profile || {}; } catch (_) { return {}; }
   }
 
-  function requestRerender() {
-    try { if (typeof render === 'function') render(); } catch (_) {}
+  function isTextEditing() {
+    try {
+      const a = document.activeElement;
+      return !!a && ['INPUT','TEXTAREA','SELECT'].includes(a.tagName);
+    } catch (_) { return false; }
+  }
+
+  function isProtectedFormScreen() {
+    try {
+      return typeof state !== 'undefined' && ['registerClient','registerPro','login'].includes(state.screen);
+    } catch (_) { return false; }
+  }
+
+  function requestRerender(force=false) {
+    try {
+      if (typeof render !== 'function') return;
+      // Replacing #screen.innerHTML destroys the focused input and Android closes
+      // the soft keyboard. Never redraw a registration/login form because an
+      // asynchronous settings/zones response arrived in the background.
+      if (!force && (isTextEditing() || isProtectedFormScreen())) return;
+      render();
+    } catch (_) {}
   }
 
   window.solucionaFeaturesEvent = (event, ok, payload={}) => {
@@ -108,9 +148,13 @@
       return;
     }
     if (event === 'zones') {
+      zonesLoadInFlight = false;
+      zonesLoadedOnce = true;
       extra.zones = payload.zones || [];
       fillRegistrationZone();
-      requestRerender();
+      // A full render here used to recreate every <input> in professional
+      // registration, immediately dismissing the Android keyboard.
+      if (!isProtectedFormScreen() && !isTextEditing()) requestRerender();
       return;
     }
     if (event === 'bootstrap') {
@@ -434,17 +478,32 @@
 
   function fillRegistrationZone() {
     const sel = document.getElementById('proZone');
-    if (!sel || !extra.zones.length) return;
+    if (!sel) return;
+    const zones = registrationZones();
     const current = sel.value;
-    sel.innerHTML = extra.zones.map(z => `<option value="${escapeHtml(z.id)}">${escapeHtml(z.name)}</option>`).join('');
-    if (current && extra.zones.some(z => z.id === current)) sel.value = current;
+    if (!zones.length) {
+      // Important: do not trigger another Firestore request from DOM mutations.
+      // An empty collection used to create a load -> render -> mutation -> load loop.
+      sel.innerHTML = '<option value="">No hay zonas cargadas</option>';
+      sel.disabled = true;
+      return;
+    }
+    sel.disabled = false;
+    sel.innerHTML = zones.map(z => `<option value="${escapeHtml(z.id)}">${escapeHtml(z.name)}</option>`).join('');
+    if (current && zones.some(z => z.id === current)) sel.value = current;
   }
 
   const observer = new MutationObserver(() => {
     const sel = document.getElementById('proZone');
     if (sel) {
-      if ((!sel.options || sel.options.length === 0) && extra.zones.length) fillRegistrationZone();
-      if ((!sel.options || sel.options.length === 0) && !extra.zones.length) F.loadZones();
+      const zones = registrationZones();
+      if (zones.length && (!sel.options || sel.options.length === 0 || sel.disabled)) {
+        fillRegistrationZone();
+      } else if (!zones.length && !zonesLoadedOnce && !zonesLoadInFlight) {
+        loadZonesOnce();
+      } else if (!zones.length && zonesLoadedOnce && (!sel.options || sel.options.length === 0)) {
+        fillRegistrationZone();
+      }
     }
     // Keep bottom nav hidden during email verification.
     try {
@@ -458,6 +517,6 @@
   // Only unauthenticated-safe calls run immediately. Authenticated modules are
   // loaded by the native-event wrapper after session/signIn succeeds.
   F.getSettings();
-  F.loadZones();
+  loadZonesOnce();
   setTimeout(requestRerender, 0);
 })();
