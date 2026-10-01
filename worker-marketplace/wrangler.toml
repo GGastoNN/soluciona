@@ -12,4 +12,4 @@ MP_REDIRECT_URI = "https://REEMPLAZAR.workers.dev/v1/mp/callback"
 [[d1_databases]]
 binding = "DB"
 database_name = "soluciona-marketplace"
-database_id = "REEMPLAZAR_D1_DATABASE_ID"
+database_id = "40e1bd1a-5909-487c-8faf-57de5033b82a"
