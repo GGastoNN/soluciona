@@ -7,7 +7,7 @@ compatibility_flags = ["nodejs_compat"]
 FIREBASE_PROJECT_ID = "soluciona-dev"
 COMMISSION_BPS = "1000"
 REFERRAL_PRO_BPS = "500"
-MP_REDIRECT_URI = "https://REEMPLAZAR.workers.dev/v1/mp/callback"
+MP_REDIRECT_URI = "https://soluciona-marketplace-api.cabasgaston.workers.dev/v1/mp/callback"
 
 [[d1_databases]]
 binding = "DB"
