@@ -146,6 +146,9 @@ public class MainActivity extends FragmentActivity {
         webView = new WebView(this);
         webView.setBackgroundColor(surfaceColor);
         webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
+        webView.requestFocus(View.FOCUS_DOWN);
         content.addView(webView, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
