@@ -62,15 +62,24 @@ jobs:
           "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Build debug APK
-        run: gradle --no-daemon :app:assembleDebug
+        env:
+          DOCUMENTS_API_URL: ${{ vars.DOCUMENTS_API_URL }}
+          MARKETPLACE_API_URL: ${{ vars.MARKETPLACE_API_URL }}
+        shell: bash
+        run: |
+          echo "Marketplace API configured: $([ -n "$MARKETPLACE_API_URL" ] && echo yes || echo no)"
+          echo "Documents API configured: $([ -n "$DOCUMENTS_API_URL" ] && echo yes || echo no)"
+          gradle --no-daemon :app:assembleDebug \
+            -PDOCUMENTS_API_URL="$DOCUMENTS_API_URL" \
+            -PMARKETPLACE_API_URL="$MARKETPLACE_API_URL"
 
       - name: Copy APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.8.6-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.8.7-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.8.6-debug
-          path: Soluciona-0.8.6-debug.apk
+          name: Soluciona-0.8.7-debug
+          path: Soluciona-0.8.7-debug.apk
           if-no-files-found: error
           retention-days: 14
