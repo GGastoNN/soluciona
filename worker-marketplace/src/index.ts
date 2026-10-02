@@ -78,6 +78,12 @@ export default {
         );
         return createCardSession(identity, paymentRequestId, env);
       }
+      if (url.pathname.startsWith("/v1/payment-requests/") && url.pathname.endsWith("/card-pay") && request.method === "POST") {
+        const paymentRequestId = decodeURIComponent(
+          url.pathname.slice("/v1/payment-requests/".length, -"/card-pay".length)
+        );
+        return processCardPayment(identity, paymentRequestId, request, env);
+      }
       if (url.pathname.startsWith("/v1/payment-requests/") && url.pathname.endsWith("/qr") && request.method === "POST") {
         const paymentRequestId = decodeURIComponent(
           url.pathname.slice("/v1/payment-requests/".length, -"/qr".length)
@@ -477,79 +483,113 @@ async function createCardSession(
     throw httpError(409, "EMAIL_REQUIRED", "Tu cuenta necesita un correo válido para pagar.");
   }
 
+  const seller = await getSeller(paymentRequest.professional_uid, env);
+  if (!seller) {
+    throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe conectar Mercado Pago.");
+  }
+
   const existing = await getLatestAttempt(paymentRequest.id, env);
   if (existing?.status === "CREATED") {
-    if (existing.method !== "CARD") {
+    if (existing.method === "QR") {
       throw httpError(
         409,
         "PAYMENT_METHOD_ACTIVE",
-        "Hay un QR activo para este cobro. Esperá a que venza antes de cambiar de método."
+        "Hay un QR activo para este cobro. Esperá a que venza antes de pagar con tarjeta."
       );
     }
-    const seller = await getSeller(paymentRequest.professional_uid, env);
-    if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
-    const accessToken = await validSellerAccessToken(seller, env);
-    const current = await mpFetch(
-      `https://api.mercadopago.com/v1/orders/${encodeURIComponent(existing.mp_order_id)}`,
-      accessToken,
-      { method: "GET" }
-    );
-    const currentStatus = String(current.status || "").toLowerCase();
-    if (currentStatus === "processed") {
-      await markPlatformAttemptProcessed(existing, paymentRequest, env);
+    if (existing.method === "CARD") {
+      const current = await syncPlatformAttempt(existing, paymentRequest, env);
+      if (current.status === "PROCESSED") {
+        throw httpError(409, "ALREADY_PAID", "El pago ya fue confirmado.");
+      }
+      if (current.status === "CREATED") {
+        throw httpError(409, "PAYMENT_IN_PROGRESS", "Ya hay un pago con tarjeta en proceso.");
+      }
+    }
+  }
+
+  return json({
+    paymentRequestId: paymentRequest.id,
+    requestId: paymentRequest.request_id,
+    amountCents: Number(paymentRequest.amount_cents),
+    amountFormatted: formatArs(paymentRequest.amount_cents)
+  });
+}
+
+async function processCardPayment(
+  identity: Identity,
+  paymentRequestId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const paymentRequest = await getPaymentRequestRow(paymentRequestId, env);
+  if (!paymentRequest) {
+    throw httpError(404, "PAYMENT_REQUEST_NOT_FOUND", "No encontramos el cobro.");
+  }
+  if (identity.uid !== paymentRequest.client_uid) {
+    throw httpError(403, "CLIENT_ONLY", "Solo el cliente del servicio puede pagar con tarjeta.");
+  }
+  if (paymentRequest.status !== "PENDING") {
+    throw httpError(409, "PAYMENT_NOT_PENDING", "Este cobro ya no está pendiente.");
+  }
+  if (!identity.email) {
+    throw httpError(409, "EMAIL_REQUIRED", "Tu cuenta necesita un correo válido para pagar.");
+  }
+
+  const body = await parseJson(request);
+  const cardToken = String(body.token || "").trim();
+  const paymentMethodId = String(body.paymentMethodId || "").trim();
+  const installments = Math.max(1, Math.min(12, Math.trunc(Number(body.installments || 1))));
+  if (!cardToken || !paymentMethodId) {
+    throw httpError(400, "INVALID_CARD_DATA", "Mercado Pago no devolvió los datos de tarjeta esperados.");
+  }
+
+  const active = await getLatestAttempt(paymentRequest.id, env);
+  if (active?.status === "CREATED") {
+    const current = await syncPlatformAttempt(active, paymentRequest, env);
+    if (current.status === "PROCESSED") {
       throw httpError(409, "ALREADY_PAID", "El pago ya fue confirmado.");
     }
-    const clientToken = String(current.client_token || "");
-    if (currentStatus === "created" && clientToken) {
-      return json({
-        paymentRequestId: paymentRequest.id,
-        requestId: paymentRequest.request_id,
-        orderId: existing.mp_order_id,
-        clientToken,
-        amountFormatted: formatArs(paymentRequest.amount_cents)
-      });
+    if (current.status === "CREATED") {
+      throw httpError(409, "PAYMENT_IN_PROGRESS", "Ya hay un pago en proceso para este cobro.");
     }
   }
 
   const seller = await getSeller(paymentRequest.professional_uid, env);
-  if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
+  if (!seller) {
+    throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe conectar Mercado Pago.");
+  }
   const accessToken = await validSellerAccessToken(seller, env);
   const commissionBps = await commissionForProfessional(paymentRequest.professional_uid, env);
   const feeCents = Math.round(paymentRequest.amount_cents * commissionBps / 10000);
-  const amountDecimal = centsToDecimal(paymentRequest.amount_cents);
-  const feeDecimal = centsToDecimal(feeCents);
   const idempotencyKey = crypto.randomUUID();
 
-  const order = await mpFetch("https://api.mercadopago.com/v1/orders", accessToken, {
+  const payment = await mpFetch("https://api.mercadopago.com/v1/payments", accessToken, {
     method: "POST",
     idempotencyKey,
     body: {
-      type: "online",
-      processing_mode: "manual",
-      total_amount: amountDecimal,
-      external_reference: paymentRequest.request_id,
+      transaction_amount: Number(centsToDecimal(paymentRequest.amount_cents)),
+      token: cardToken,
       description: "Servicio Soluciona",
-      marketplace_fee: feeDecimal,
-      expiration_time: "P1D",
-      payer: { email: identity.email },
-      items: [{
-        title: "Servicio Soluciona",
-        quantity: 1,
-        unit_price: amountDecimal
-      }]
+      installments,
+      payment_method_id: paymentMethodId,
+      external_reference: paymentRequest.request_id,
+      application_fee: Number(centsToDecimal(feeCents)),
+      payer: { email: identity.email }
     }
   });
 
-  const orderId = String(order.id || "");
-  const clientToken = String(order.client_token || "");
-  if (!orderId || !clientToken) {
-    throw httpError(502, "MP_CARD_SESSION_MISSING", "Mercado Pago no devolvió la sesión de tarjeta esperada.");
+  const paymentId = String(payment.id || "");
+  const mpStatus = String(payment.status || "").toLowerCase();
+  const statusDetail = String(payment.status_detail || "");
+  if (!paymentId) {
+    throw httpError(502, "MP_PAYMENT_MISSING", "Mercado Pago no devolvió el identificador del pago.");
   }
 
-  await insertPlatformAttempt({
+  const attempt = await insertPlatformAttempt({
     paymentRequest,
     method: "CARD",
-    orderId,
+    orderId: paymentId,
     amountCents: paymentRequest.amount_cents,
     feeCents,
     commissionBps,
@@ -557,12 +597,24 @@ async function createCardSession(
     idempotencyKey
   }, env);
 
+  if (mpStatus === "approved") {
+    await markPlatformAttemptProcessed(attempt, paymentRequest, env);
+  } else if (["rejected", "cancelled", "canceled"].includes(mpStatus)) {
+    await markPlatformAttemptTerminal(attempt, paymentRequest, "REJECTED", env);
+  } else if (["refunded", "charged_back"].includes(mpStatus)) {
+    await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
+  }
+
   return json({
     paymentRequestId: paymentRequest.id,
     requestId: paymentRequest.request_id,
-    orderId,
-    clientToken,
-    amountFormatted: formatArs(paymentRequest.amount_cents)
+    paymentId,
+    status: mpStatus,
+    statusDetail,
+    amountFormatted: formatArs(paymentRequest.amount_cents),
+    message: mpStatus === "rejected"
+      ? `Mercado Pago rechazó el pago${statusDetail ? ` (${statusDetail})` : ""}.`
+      : ""
   });
 }
 
@@ -759,21 +811,39 @@ async function syncPlatformAttempt(
   const seller = await getSeller(attempt.professional_uid, env);
   if (!seller) return attempt;
   const accessToken = await validSellerAccessToken(seller, env);
-  const order = await mpFetch(
-    `https://api.mercadopago.com/v1/orders/${encodeURIComponent(attempt.mp_order_id)}`,
-    accessToken,
-    { method: "GET" }
-  );
-  const status = String(order.status || "").toLowerCase();
-  if (status === "processed") {
-    await markPlatformAttemptProcessed(attempt, paymentRequest, env);
-  } else if (status === "canceled") {
-    await markPlatformAttemptTerminal(attempt, paymentRequest, "CANCELED", env);
-  } else if (status === "refunded") {
-    await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
-  } else if (status === "expired") {
-    await markPlatformAttemptTerminal(attempt, paymentRequest, "EXPIRED", env);
+
+  if (attempt.method === "CARD") {
+    const payment = await mpFetch(
+      `https://api.mercadopago.com/v1/payments/${encodeURIComponent(attempt.mp_order_id)}`,
+      accessToken,
+      { method: "GET" }
+    );
+    const status = String(payment.status || "").toLowerCase();
+    if (status === "approved") {
+      await markPlatformAttemptProcessed(attempt, paymentRequest, env);
+    } else if (["rejected", "cancelled", "canceled"].includes(status)) {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "REJECTED", env);
+    } else if (["refunded", "charged_back"].includes(status)) {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
+    }
+  } else {
+    const order = await mpFetch(
+      `https://api.mercadopago.com/v1/orders/${encodeURIComponent(attempt.mp_order_id)}`,
+      accessToken,
+      { method: "GET" }
+    );
+    const status = String(order.status || "").toLowerCase();
+    if (status === "processed") {
+      await markPlatformAttemptProcessed(attempt, paymentRequest, env);
+    } else if (status === "canceled") {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "CANCELED", env);
+    } else if (status === "refunded") {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
+    } else if (status === "expired") {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "EXPIRED", env);
+    }
   }
+
   return (await env.DB.prepare("SELECT * FROM payment_attempts WHERE id=?")
     .bind(attempt.id).first<PaymentAttemptRow>())!;
 }
@@ -1073,21 +1143,37 @@ async function handleMpWebhook(request: Request, url: URL, env: Env): Promise<Re
     const seller = await getSeller(attempt.professional_uid, env);
     if (!seller) return json({ ok: true, ignored: true });
     const accessToken = await validSellerAccessToken(seller, env);
-    const order = await mpFetch(
-      `https://api.mercadopago.com/v1/orders/${encodeURIComponent(orderId)}`,
-      accessToken,
-      { method: "GET" }
-    );
-    const status = String(order.status || "").toLowerCase();
 
-    if (action === "order.processed" || status === "processed") {
-      await markPlatformAttemptProcessed(attempt, paymentRequest, env);
-    } else if (action === "order.canceled" || status === "canceled") {
-      await markPlatformAttemptTerminal(attempt, paymentRequest, "CANCELED", env);
-    } else if (action === "order.refunded" || status === "refunded") {
-      await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
-    } else if (action === "order.expired" || status === "expired") {
-      await markPlatformAttemptTerminal(attempt, paymentRequest, "EXPIRED", env);
+    if (attempt.method === "CARD") {
+      const payment = await mpFetch(
+        `https://api.mercadopago.com/v1/payments/${encodeURIComponent(orderId)}`,
+        accessToken,
+        { method: "GET" }
+      );
+      const status = String(payment.status || "").toLowerCase();
+      if (status === "approved") {
+        await markPlatformAttemptProcessed(attempt, paymentRequest, env);
+      } else if (["rejected", "cancelled", "canceled"].includes(status)) {
+        await markPlatformAttemptTerminal(attempt, paymentRequest, "REJECTED", env);
+      } else if (["refunded", "charged_back"].includes(status)) {
+        await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
+      }
+    } else {
+      const order = await mpFetch(
+        `https://api.mercadopago.com/v1/orders/${encodeURIComponent(orderId)}`,
+        accessToken,
+        { method: "GET" }
+      );
+      const status = String(order.status || "").toLowerCase();
+      if (action === "order.processed" || status === "processed") {
+        await markPlatformAttemptProcessed(attempt, paymentRequest, env);
+      } else if (action === "order.canceled" || status === "canceled") {
+        await markPlatformAttemptTerminal(attempt, paymentRequest, "CANCELED", env);
+      } else if (action === "order.refunded" || status === "refunded") {
+        await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
+      } else if (action === "order.expired" || status === "expired") {
+        await markPlatformAttemptTerminal(attempt, paymentRequest, "EXPIRED", env);
+      }
     }
     return json({ ok: true });
   }
