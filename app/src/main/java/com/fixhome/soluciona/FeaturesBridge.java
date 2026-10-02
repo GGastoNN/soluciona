@@ -569,18 +569,18 @@ public final class FeaturesBridge {
                 new JSONObject(),
                 "cardSession",
                 payload -> {
-                    String orderId = payload.optString("orderId", "");
-                    String clientToken = payload.optString("clientToken", "");
                     String serviceRequestId = payload.optString("requestId", "");
-                    if (orderId.isEmpty() || clientToken.isEmpty()) {
-                        emitMessage("cardSession", false, "Mercado Pago no devolvió una sesión de tarjeta válida.");
+                    long amountCents = payload.optLong("amountCents", 0L);
+                    String amountFormatted = payload.optString("amountFormatted", "");
+                    if (amountCents <= 0L) {
+                        emitMessage("cardSession", false, "El cobro no tiene un importe válido.");
                         return;
                     }
                     activity.launchCardCheckout(
-                            orderId,
-                            clientToken,
                             paymentRequestId,
-                            serviceRequestId
+                            serviceRequestId,
+                            amountCents,
+                            amountFormatted
                     );
                 }
         );
