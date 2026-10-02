@@ -37,7 +37,7 @@ export default {
       const url = new URL(request.url);
 
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "soluciona-marketplace", version: "0.8.2" });
+        return json({ ok: true, service: "soluciona-marketplace", version: "0.9.0" });
       }
 
       if (url.pathname === "/v1/mp/callback" && request.method === "GET") {
@@ -64,6 +64,27 @@ export default {
         return marketplaceStatus(identity, env);
       }
 
+      if (url.pathname === "/v1/payment-requests" && request.method === "POST") {
+        return createPlatformPaymentRequest(identity, request, env);
+      }
+      if (url.pathname.startsWith("/v1/payment-requests/by-service/") && request.method === "GET") {
+        const requestId = decodeURIComponent(url.pathname.slice("/v1/payment-requests/by-service/".length));
+        return getPlatformPaymentRequest(identity, requestId, env);
+      }
+      if (url.pathname.startsWith("/v1/payment-requests/") && url.pathname.endsWith("/card-session") && request.method === "POST") {
+        const paymentRequestId = decodeURIComponent(
+          url.pathname.slice("/v1/payment-requests/".length, -"/card-session".length)
+        );
+        return createCardSession(identity, paymentRequestId, env);
+      }
+      if (url.pathname.startsWith("/v1/payment-requests/") && url.pathname.endsWith("/qr") && request.method === "POST") {
+        const paymentRequestId = decodeURIComponent(
+          url.pathname.slice("/v1/payment-requests/".length, -"/qr".length)
+        );
+        return createPaymentRequestQr(identity, paymentRequestId, request, env);
+      }
+
+      // Legacy 0.8.x routes remain temporarily for backward compatibility.
       if (url.pathname === "/v1/payments/qr" && request.method === "POST") {
         return createPaymentQr(identity, request, env);
       }
@@ -291,6 +312,583 @@ async function syncStoreAndPosForService(
   }
 }
 
+
+type PaymentRequestRow = {
+  id: string;
+  request_id: string;
+  client_uid: string;
+  professional_uid: string;
+  amount_cents: number;
+  note: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+};
+
+type PaymentAttemptRow = {
+  id: string;
+  payment_request_id: string;
+  request_id: string;
+  client_uid: string;
+  professional_uid: string;
+  method: string;
+  mp_order_id: string;
+  amount_cents: number;
+  marketplace_fee_cents: number;
+  commission_bps: number;
+  status: string;
+  qr_data: string | null;
+  idempotency_key: string;
+  created_at: number;
+  updated_at: number;
+};
+
+async function createPlatformPaymentRequest(
+  identity: Identity,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const body = await parseJson(request);
+  const requestId = String(body.requestId || "").trim();
+  const amount = parseMoney(String(body.amount || ""));
+  const note = String(body.note || "").trim().slice(0, 500);
+
+  if (!requestId || amount <= 0) {
+    throw httpError(400, "INVALID_PAYMENT_REQUEST", "Ingresá un importe válido.");
+  }
+  const role = await getUserRole(identity.uid, env);
+  if (role !== "PROFESSIONAL") {
+    throw httpError(403, "PROFESSIONAL_ONLY", "Solo el profesional puede enviar el cobro.");
+  }
+
+  const service = await firestoreGet(`service_requests/${requestId}`, env);
+  if (!service) throw httpError(404, "REQUEST_NOT_FOUND", "No encontramos el servicio.");
+  if (String(service.professionalUid || "") !== identity.uid) {
+    throw httpError(403, "NOT_ASSIGNED", "No estás asignado a este servicio.");
+  }
+  const serviceStatus = String(service.status || "");
+  if (!["IN_PROGRESS", "AWAITING_PAYMENT"].includes(serviceStatus)) {
+    throw httpError(409, "INVALID_STATUS", "El trabajo debe estar en curso para enviar el cobro.");
+  }
+
+  const seller = await getSeller(identity.uid, env);
+  if (!seller) {
+    throw httpError(409, "MP_NOT_CONNECTED", "Conectá Mercado Pago antes de enviar el cobro.");
+  }
+
+  const existing = await env.DB.prepare(
+    "SELECT * FROM payment_requests WHERE request_id=? LIMIT 1"
+  ).bind(requestId).first<PaymentRequestRow>();
+
+  if (existing?.status === "PAID") {
+    throw httpError(409, "ALREADY_PAID", "Este servicio ya está pagado.");
+  }
+
+  if (existing) {
+    const active = await env.DB.prepare(
+      "SELECT id FROM payment_attempts WHERE payment_request_id=? AND status='CREATED' LIMIT 1"
+    ).bind(existing.id).first();
+    if (active) {
+      throw httpError(
+        409,
+        "PAYMENT_IN_PROGRESS",
+        "Ya hay un intento de pago activo. Esperá a que termine o venza antes de cambiar el importe."
+      );
+    }
+  }
+
+  const now = Date.now();
+  const id = existing?.id || crypto.randomUUID();
+  const clientUid = String(service.clientUid || "");
+  if (!clientUid) throw httpError(409, "CLIENT_NOT_FOUND", "El servicio no tiene un cliente válido.");
+
+  await env.DB.prepare(`
+    INSERT INTO payment_requests(
+      id,request_id,client_uid,professional_uid,amount_cents,note,status,created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(request_id) DO UPDATE SET
+      amount_cents=excluded.amount_cents,
+      note=excluded.note,
+      status='PENDING',
+      updated_at=excluded.updated_at
+  `).bind(
+    id, requestId, clientUid, identity.uid, amount, note, "PENDING",
+    existing?.created_at || now, now
+  ).run();
+
+  const commissionBps = await commissionForProfessional(identity.uid, env);
+  const feeCents = Math.round(amount * commissionBps / 10000);
+
+  await firestorePatch(`service_requests/${requestId}`, {
+    status: "AWAITING_PAYMENT",
+    paymentStatus: "PENDING",
+    paymentRequestId: id,
+    amountCents: amount,
+    marketplaceFeeCents: feeCents,
+    updatedAt: new Date()
+  }, env);
+
+  const saved = await getPaymentRequestRow(id, env);
+  return platformPaymentRequestResponse(saved!, null, identity.uid);
+}
+
+async function getPlatformPaymentRequest(
+  identity: Identity,
+  requestId: string,
+  env: Env
+): Promise<Response> {
+  const paymentRequest = await env.DB.prepare(
+    "SELECT * FROM payment_requests WHERE request_id=? LIMIT 1"
+  ).bind(requestId).first<PaymentRequestRow>();
+
+  if (!paymentRequest) {
+    throw httpError(404, "PAYMENT_REQUEST_NOT_FOUND", "Todavía no hay un cobro enviado para este servicio.");
+  }
+  ensurePaymentRequestMember(identity, paymentRequest);
+
+  let attempt = await getLatestAttempt(paymentRequest.id, env);
+  if (attempt && attempt.status === "CREATED") {
+    attempt = await syncPlatformAttempt(attempt, paymentRequest, env);
+  }
+  const freshRequest = await getPaymentRequestRow(paymentRequest.id, env);
+  return platformPaymentRequestResponseAsync(freshRequest!, attempt, identity.uid);
+}
+
+async function createCardSession(
+  identity: Identity,
+  paymentRequestId: string,
+  env: Env
+): Promise<Response> {
+  const paymentRequest = await getPaymentRequestRow(paymentRequestId, env);
+  if (!paymentRequest) {
+    throw httpError(404, "PAYMENT_REQUEST_NOT_FOUND", "No encontramos el cobro.");
+  }
+  if (identity.uid !== paymentRequest.client_uid) {
+    throw httpError(403, "CLIENT_ONLY", "Solo el cliente del servicio puede pagar con tarjeta.");
+  }
+  if (paymentRequest.status !== "PENDING") {
+    throw httpError(409, "PAYMENT_NOT_PENDING", "Este cobro ya no está pendiente.");
+  }
+  if (!identity.email) {
+    throw httpError(409, "EMAIL_REQUIRED", "Tu cuenta necesita un correo válido para pagar.");
+  }
+
+  const existing = await getLatestAttempt(paymentRequest.id, env);
+  if (existing?.status === "CREATED") {
+    if (existing.method !== "CARD") {
+      throw httpError(
+        409,
+        "PAYMENT_METHOD_ACTIVE",
+        "Hay un QR activo para este cobro. Esperá a que venza antes de cambiar de método."
+      );
+    }
+    const seller = await getSeller(paymentRequest.professional_uid, env);
+    if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
+    const accessToken = await validSellerAccessToken(seller, env);
+    const current = await mpFetch(
+      `https://api.mercadopago.com/v1/orders/${encodeURIComponent(existing.mp_order_id)}`,
+      accessToken,
+      { method: "GET" }
+    );
+    const currentStatus = String(current.status || "").toLowerCase();
+    if (currentStatus === "processed") {
+      await markPlatformAttemptProcessed(existing, paymentRequest, env);
+      throw httpError(409, "ALREADY_PAID", "El pago ya fue confirmado.");
+    }
+    const clientToken = String(current.client_token || "");
+    if (currentStatus === "created" && clientToken) {
+      return json({
+        paymentRequestId: paymentRequest.id,
+        requestId: paymentRequest.request_id,
+        orderId: existing.mp_order_id,
+        clientToken,
+        amountFormatted: formatArs(paymentRequest.amount_cents)
+      });
+    }
+  }
+
+  const seller = await getSeller(paymentRequest.professional_uid, env);
+  if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
+  const accessToken = await validSellerAccessToken(seller, env);
+  const commissionBps = await commissionForProfessional(paymentRequest.professional_uid, env);
+  const feeCents = Math.round(paymentRequest.amount_cents * commissionBps / 10000);
+  const amountDecimal = centsToDecimal(paymentRequest.amount_cents);
+  const feeDecimal = centsToDecimal(feeCents);
+  const idempotencyKey = crypto.randomUUID();
+
+  const order = await mpFetch("https://api.mercadopago.com/v1/orders", accessToken, {
+    method: "POST",
+    idempotencyKey,
+    body: {
+      type: "online",
+      processing_mode: "manual",
+      total_amount: amountDecimal,
+      external_reference: paymentRequest.request_id,
+      description: "Servicio Soluciona",
+      marketplace_fee: feeDecimal,
+      expiration_time: "P1D",
+      payer: { email: identity.email },
+      items: [{
+        title: "Servicio Soluciona",
+        quantity: 1,
+        unit_price: amountDecimal
+      }]
+    }
+  });
+
+  const orderId = String(order.id || "");
+  const clientToken = String(order.client_token || "");
+  if (!orderId || !clientToken) {
+    throw httpError(502, "MP_CARD_SESSION_MISSING", "Mercado Pago no devolvió la sesión de tarjeta esperada.");
+  }
+
+  await insertPlatformAttempt({
+    paymentRequest,
+    method: "CARD",
+    orderId,
+    amountCents: paymentRequest.amount_cents,
+    feeCents,
+    commissionBps,
+    qrData: null,
+    idempotencyKey
+  }, env);
+
+  return json({
+    paymentRequestId: paymentRequest.id,
+    requestId: paymentRequest.request_id,
+    orderId,
+    clientToken,
+    amountFormatted: formatArs(paymentRequest.amount_cents)
+  });
+}
+
+async function createPaymentRequestQr(
+  identity: Identity,
+  paymentRequestId: string,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const paymentRequest = await getPaymentRequestRow(paymentRequestId, env);
+  if (!paymentRequest) {
+    throw httpError(404, "PAYMENT_REQUEST_NOT_FOUND", "No encontramos el cobro.");
+  }
+  if (identity.uid !== paymentRequest.professional_uid) {
+    throw httpError(403, "PROFESSIONAL_ONLY", "Solo el profesional puede mostrar el QR del servicio.");
+  }
+  if (paymentRequest.status !== "PENDING") {
+    throw httpError(409, "PAYMENT_NOT_PENDING", "Este cobro ya no está pendiente.");
+  }
+
+  const body = await parseJson(request);
+  const latitude = Number(body.latitude);
+  const longitude = Number(body.longitude);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+      || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw httpError(400, "LOCATION_REQUIRED", "Necesitamos la ubicación actual del servicio para generar el QR.");
+  }
+
+  const existing = await getLatestAttempt(paymentRequest.id, env);
+  if (existing?.status === "CREATED") {
+    if (existing.method !== "QR") {
+      throw httpError(
+        409,
+        "PAYMENT_METHOD_ACTIVE",
+        "Hay un pago con tarjeta en curso. Esperá a que finalice antes de generar QR."
+      );
+    }
+    let current = await syncPlatformAttempt(existing, paymentRequest, env);
+    if (current.status === "PROCESSED") {
+      const paidRequest = await getPaymentRequestRow(paymentRequest.id, env);
+      return platformPaymentRequestResponseAsync(paidRequest!, current, identity.uid);
+    }
+    if (current.status === "CREATED" && current.qr_data) {
+      return platformPaymentRequestResponseAsync(paymentRequest, current, identity.uid);
+    }
+  }
+
+  const service = await firestoreGet(`service_requests/${paymentRequest.request_id}`, env);
+  if (!service) throw httpError(404, "REQUEST_NOT_FOUND", "No encontramos el servicio.");
+  const privateService = await firestoreGet(`service_request_private/${paymentRequest.request_id}`, env);
+  const serviceAddress: any = privateService?.address || {};
+
+  await syncStoreAndPosForService(
+    paymentRequest.professional_uid,
+    serviceAddress,
+    latitude,
+    longitude,
+    env
+  );
+
+  const seller = await getSeller(paymentRequest.professional_uid, env);
+  if (!seller?.external_pos_id) {
+    throw httpError(
+      409,
+      "MP_POS_NOT_READY",
+      seller?.setup_error || "La caja de Mercado Pago todavía no está configurada."
+    );
+  }
+
+  const commissionBps = await commissionForProfessional(paymentRequest.professional_uid, env);
+  const feeCents = Math.round(paymentRequest.amount_cents * commissionBps / 10000);
+  const amountDecimal = centsToDecimal(paymentRequest.amount_cents);
+  const feeDecimal = centsToDecimal(feeCents);
+  const accessToken = await validSellerAccessToken(seller, env);
+  const idempotencyKey = crypto.randomUUID();
+
+  const order = await mpFetch("https://api.mercadopago.com/v1/orders", accessToken, {
+    method: "POST",
+    idempotencyKey,
+    body: {
+      type: "qr",
+      total_amount: amountDecimal,
+      description: "Servicio Soluciona",
+      external_reference: paymentRequest.request_id,
+      expiration_time: "PT15M",
+      marketplace_fee: feeDecimal,
+      config: {
+        qr: {
+          external_pos_id: seller.external_pos_id,
+          mode: "hybrid"
+        }
+      },
+      transactions: {
+        payments: [{ amount: amountDecimal }]
+      },
+      items: [{
+        title: "Servicio Soluciona",
+        unit_price: amountDecimal,
+        quantity: 1,
+        unit_measure: "unit"
+      }]
+    }
+  });
+
+  const orderId = String(order.id || "");
+  const qrData = String(order?.type_response?.qr_data || "");
+  if (!orderId || !qrData) {
+    throw httpError(502, "MP_QR_MISSING", "Mercado Pago no devolvió el QR esperado.");
+  }
+
+  const attempt = await insertPlatformAttempt({
+    paymentRequest,
+    method: "QR",
+    orderId,
+    amountCents: paymentRequest.amount_cents,
+    feeCents,
+    commissionBps,
+    qrData,
+    idempotencyKey
+  }, env);
+
+  return platformPaymentRequestResponseAsync(paymentRequest, attempt, identity.uid);
+}
+
+async function getPaymentRequestRow(
+  id: string,
+  env: Env
+): Promise<PaymentRequestRow | null> {
+  return env.DB.prepare("SELECT * FROM payment_requests WHERE id=?")
+    .bind(id).first<PaymentRequestRow>();
+}
+
+async function getLatestAttempt(
+  paymentRequestId: string,
+  env: Env
+): Promise<PaymentAttemptRow | null> {
+  return env.DB.prepare(
+    "SELECT * FROM payment_attempts WHERE payment_request_id=? ORDER BY created_at DESC LIMIT 1"
+  ).bind(paymentRequestId).first<PaymentAttemptRow>();
+}
+
+async function insertPlatformAttempt(input: {
+  paymentRequest: PaymentRequestRow;
+  method: "CARD" | "QR";
+  orderId: string;
+  amountCents: number;
+  feeCents: number;
+  commissionBps: number;
+  qrData: string | null;
+  idempotencyKey: string;
+}, env: Env): Promise<PaymentAttemptRow> {
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  await env.DB.prepare(`
+    INSERT INTO payment_attempts(
+      id,payment_request_id,request_id,client_uid,professional_uid,method,mp_order_id,
+      amount_cents,marketplace_fee_cents,commission_bps,status,qr_data,idempotency_key,
+      created_at,updated_at
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).bind(
+    id,
+    input.paymentRequest.id,
+    input.paymentRequest.request_id,
+    input.paymentRequest.client_uid,
+    input.paymentRequest.professional_uid,
+    input.method,
+    input.orderId,
+    input.amountCents,
+    input.feeCents,
+    input.commissionBps,
+    "CREATED",
+    input.qrData,
+    input.idempotencyKey,
+    now,
+    now
+  ).run();
+  return (await env.DB.prepare("SELECT * FROM payment_attempts WHERE id=?")
+    .bind(id).first<PaymentAttemptRow>())!;
+}
+
+function ensurePaymentRequestMember(identity: Identity, paymentRequest: PaymentRequestRow) {
+  if (identity.uid !== paymentRequest.client_uid && identity.uid !== paymentRequest.professional_uid) {
+    throw httpError(403, "FORBIDDEN", "No tenés acceso a este cobro.");
+  }
+}
+
+async function syncPlatformAttempt(
+  attempt: PaymentAttemptRow,
+  paymentRequest: PaymentRequestRow,
+  env: Env
+): Promise<PaymentAttemptRow> {
+  if (attempt.status !== "CREATED") return attempt;
+  const seller = await getSeller(attempt.professional_uid, env);
+  if (!seller) return attempt;
+  const accessToken = await validSellerAccessToken(seller, env);
+  const order = await mpFetch(
+    `https://api.mercadopago.com/v1/orders/${encodeURIComponent(attempt.mp_order_id)}`,
+    accessToken,
+    { method: "GET" }
+  );
+  const status = String(order.status || "").toLowerCase();
+  if (status === "processed") {
+    await markPlatformAttemptProcessed(attempt, paymentRequest, env);
+  } else if (status === "canceled") {
+    await markPlatformAttemptTerminal(attempt, paymentRequest, "CANCELED", env);
+  } else if (status === "refunded") {
+    await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
+  } else if (status === "expired") {
+    await markPlatformAttemptTerminal(attempt, paymentRequest, "EXPIRED", env);
+  }
+  return (await env.DB.prepare("SELECT * FROM payment_attempts WHERE id=?")
+    .bind(attempt.id).first<PaymentAttemptRow>())!;
+}
+
+async function markPlatformAttemptProcessed(
+  attempt: PaymentAttemptRow,
+  paymentRequest: PaymentRequestRow,
+  env: Env
+): Promise<void> {
+  if (attempt.status === "PROCESSED" || paymentRequest.status === "PAID") return;
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE payment_attempts SET status='PROCESSED',updated_at=? WHERE id=?")
+      .bind(now, attempt.id),
+    env.DB.prepare("UPDATE payment_requests SET status='PAID',updated_at=? WHERE id=?")
+      .bind(now, paymentRequest.id)
+  ]);
+
+  await firestorePatch(`service_requests/${paymentRequest.request_id}`, {
+    status: "COMPLETED",
+    paymentStatus: "PAID",
+    paymentOrderId: attempt.mp_order_id,
+    amountCents: Number(paymentRequest.amount_cents),
+    marketplaceFeeCents: Number(attempt.marketplace_fee_cents),
+    paidAt: new Date(),
+    completedAt: new Date(),
+    updatedAt: new Date()
+  }, env);
+
+  if (Number(attempt.commission_bps) < standardCommissionBps(env)) {
+    await consumeProfessionalDiscount(paymentRequest.professional_uid, env);
+  }
+  await qualifyReferralIfFirstActivity(paymentRequest.client_uid, "CLIENT", attempt.id, env);
+  await qualifyReferralIfFirstActivity(paymentRequest.professional_uid, "PROFESSIONAL", attempt.id, env);
+}
+
+async function markPlatformAttemptTerminal(
+  attempt: PaymentAttemptRow,
+  paymentRequest: PaymentRequestRow,
+  status: string,
+  env: Env
+): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare("UPDATE payment_attempts SET status=?,updated_at=? WHERE id=?")
+    .bind(status, now, attempt.id).run();
+
+  if (status === "REFUNDED") {
+    await env.DB.prepare("UPDATE payment_requests SET status='REFUNDED',updated_at=? WHERE id=?")
+      .bind(now, paymentRequest.id).run();
+    await firestorePatch(`service_requests/${paymentRequest.request_id}`, {
+      paymentStatus: "REFUNDED",
+      status: "PAYMENT_REVIEW",
+      updatedAt: new Date()
+    }, env);
+  }
+}
+
+function platformPaymentRequestResponse(
+  paymentRequest: PaymentRequestRow,
+  attempt: PaymentAttemptRow | null,
+  viewerUid: string
+): Response {
+  let qrSvg = "";
+  if (attempt?.method === "QR" && attempt.qr_data && attempt.status === "CREATED") {
+    // Generated below because QRCode.toString is async; callers that need QR use
+    // platformPaymentRequestResponseAsync.
+  }
+  return json({
+    id: paymentRequest.id,
+    requestId: paymentRequest.request_id,
+    status: paymentRequest.status,
+    note: paymentRequest.note || "",
+    amountCents: Number(paymentRequest.amount_cents || 0),
+    amountFormatted: formatArs(Number(paymentRequest.amount_cents || 0)),
+    clientUid: paymentRequest.client_uid,
+    professionalUid: paymentRequest.professional_uid,
+    viewerRole: viewerUid === paymentRequest.client_uid ? "CLIENT" : "PROFESSIONAL",
+    attempt: attempt ? {
+      id: attempt.id,
+      method: attempt.method,
+      status: attempt.status,
+      orderId: attempt.mp_order_id,
+      marketplaceFeeCents: Number(attempt.marketplace_fee_cents || 0),
+      marketplaceFeeFormatted: formatArs(Number(attempt.marketplace_fee_cents || 0))
+    } : null,
+    qrSvg
+  });
+}
+
+async function platformPaymentRequestResponseAsync(
+  paymentRequest: PaymentRequestRow,
+  attempt: PaymentAttemptRow | null,
+  viewerUid: string
+): Promise<Response> {
+  let qrSvg = "";
+  if (attempt?.method === "QR" && attempt.qr_data && attempt.status === "CREATED") {
+    qrSvg = await QRCode.toString(String(attempt.qr_data), { type: "svg", margin: 1, width: 360 });
+  }
+  return json({
+    id: paymentRequest.id,
+    requestId: paymentRequest.request_id,
+    status: paymentRequest.status,
+    note: paymentRequest.note || "",
+    amountCents: Number(paymentRequest.amount_cents || 0),
+    amountFormatted: formatArs(Number(paymentRequest.amount_cents || 0)),
+    clientUid: paymentRequest.client_uid,
+    professionalUid: paymentRequest.professional_uid,
+    viewerRole: viewerUid === paymentRequest.client_uid ? "CLIENT" : "PROFESSIONAL",
+    attempt: attempt ? {
+      id: attempt.id,
+      method: attempt.method,
+      status: attempt.status,
+      orderId: attempt.mp_order_id,
+      marketplaceFeeCents: Number(attempt.marketplace_fee_cents || 0),
+      marketplaceFeeFormatted: formatArs(Number(attempt.marketplace_fee_cents || 0))
+    } : null,
+    qrSvg
+  });
+}
+
 async function createPaymentQr(identity: Identity, request: Request, env: Env): Promise<Response> {
   const body = await parseJson(request);
   const requestId = String(body.requestId || "").trim();
@@ -355,7 +953,7 @@ async function createPaymentQr(identity: Identity, request: Request, env: Env): 
     config: {
       qr: {
         external_pos_id: freshSeller.external_pos_id,
-        mode: "dynamic"
+        mode: "hybrid"
       }
     },
     transactions: {
@@ -459,11 +1057,41 @@ async function handleMpWebhook(request: Request, url: URL, env: Env): Promise<Re
   const action = String(body?.action || "");
   const orderId = String(body?.data?.id || dataIdRaw);
 
+  const attempt = await env.DB.prepare(
+    "SELECT * FROM payment_attempts WHERE mp_order_id=? LIMIT 1"
+  ).bind(orderId).first<PaymentAttemptRow>();
+
+  if (attempt) {
+    const paymentRequest = await getPaymentRequestRow(attempt.payment_request_id, env);
+    if (!paymentRequest) return json({ ok: true, ignored: true });
+
+    const seller = await getSeller(attempt.professional_uid, env);
+    if (!seller) return json({ ok: true, ignored: true });
+    const accessToken = await validSellerAccessToken(seller, env);
+    const order = await mpFetch(
+      `https://api.mercadopago.com/v1/orders/${encodeURIComponent(orderId)}`,
+      accessToken,
+      { method: "GET" }
+    );
+    const status = String(order.status || "").toLowerCase();
+
+    if (action === "order.processed" || status === "processed") {
+      await markPlatformAttemptProcessed(attempt, paymentRequest, env);
+    } else if (action === "order.canceled" || status === "canceled") {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "CANCELED", env);
+    } else if (action === "order.refunded" || status === "refunded") {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "REFUNDED", env);
+    } else if (action === "order.expired" || status === "expired") {
+      await markPlatformAttemptTerminal(attempt, paymentRequest, "EXPIRED", env);
+    }
+    return json({ ok: true });
+  }
+
+  // Legacy 0.8.x payment rows remain supported during the migration.
   const payment = await env.DB.prepare(
     "SELECT * FROM payments WHERE mp_order_id=? LIMIT 1"
   ).bind(orderId).first<any>();
 
-  // Webhooks for a different seller/order can reach the same marketplace app.
   if (!payment) return json({ ok: true, ignored: true });
 
   const seller = await getSeller(payment.professional_uid, env);
