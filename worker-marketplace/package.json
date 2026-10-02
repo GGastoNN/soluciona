@@ -1,6 +1,6 @@
 {
   "name": "soluciona-marketplace-api",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,7 +15,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260930.2",
+    "@cloudflare/workers-types": "^4.20260901.0",
     "@types/qrcode": "^1.5.5",
     "typescript": "^5.9.2",
     "wrangler": "^4.0.0"
