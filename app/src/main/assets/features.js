@@ -246,6 +246,20 @@
       featureToast('Continuá la vinculación en Mercado Pago.');
       return;
     }
+    if (event === 'marketplaceDisconnect') {
+      extra.mp = {
+        connected: false,
+        mpUserId: '',
+        publicKeyReady: false,
+        posReady: false,
+        setupError: ''
+      };
+      featureToast(payload.message || 'Mercado Pago fue desvinculado.');
+      const modal = document.getElementById('sol-mp-modal');
+      if (modal) renderMpModal();
+      requestRerender();
+      return;
+    }
     if (event === 'currentLocation') {
       extra.charge.locating = false;
       extra.charge.locationError = '';
@@ -808,6 +822,24 @@
     if (extra.settings.marketplaceConfigured) F.getMarketplaceStatus();
   }
 
+  window.solConfirmDisconnectMercadoPago = function() {
+    const approved = window.confirm(
+      '¿Desvincular Mercado Pago?\n\n' +
+      'Soluciona dejará de usar esta conexión para nuevos cobros. ' +
+      'Tendrás que volver a autorizar Mercado Pago para cobrar nuevamente.'
+    );
+
+    if (!approved) return;
+
+    const btn = document.getElementById('sol-mp-disconnect-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Desvinculando…';
+    }
+
+    F.disconnectMercadoPago();
+  };
+
   function renderMpModal() {
     const body = document.getElementById('sol-mp-body');
     if (!body) return;
@@ -821,8 +853,25 @@
       return;
     }
     body.innerHTML = mp.connected
-      ? `<div class="card"><b>✓ Mercado Pago conectado</b><div class="metric">Cuenta: ${escapeHtml(mp.mpUserId||'')}</div><div class="metric">QR/POS: ${mp.posReady?'Configurado':'Se configurará en el primer cobro con tu ubicación actual'}</div></div>
-         <div class="notice">Los cobros usan QR híbrido: QR estático + QR dinámico sobre una misma order. La comisión de Soluciona se calcula en el servidor, nunca en el APK.</div>`
+      ? `<div class="card">
+           <div class="row">
+             <div class="grow">
+               <b>✓ Mercado Pago conectado</b>
+               <div class="metric">Cuenta: ${escapeHtml(mp.mpUserId||'')}</div>
+               <div class="metric">QR/POS: ${mp.posReady?'Configurado':'Se configurará en el primer cobro con tu ubicación actual'}</div>
+             </div>
+             <span class="badge ok">Activo</span>
+           </div>
+         </div>
+         <div class="notice">
+           La conexión se usa para recibir pagos de tus servicios. Soluciona nunca muestra tus credenciales de Mercado Pago en la app.
+         </div>
+         <button
+           id="sol-mp-disconnect-btn"
+           class="btn dangerBtn"
+           onclick="solConfirmDisconnectMercadoPago()">
+           Desvincular Mercado Pago
+         </button>`
       : `<div class="card"><b>Conectá tu cuenta</b><p class="sub">Mercado Pago te pedirá autorización. Soluciona nunca recibe tu contraseña.</p><button class="btn primary" onclick="SolucionaFeatures.connectMercadoPago()">Conectar Mercado Pago</button></div>`;
   }
 
