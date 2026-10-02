@@ -2,9 +2,14 @@ package com.fixhome.soluciona
 
 import android.app.Activity
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.text.Editable
 import android.text.InputType
+import android.text.TextWatcher
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -12,6 +17,8 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.ScrollView
+import android.widget.Space
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import com.google.firebase.auth.FirebaseAuth
@@ -21,7 +28,9 @@ import com.mercadopago.sdk.android.coremethods.domain.model.ResultError
 import com.mercadopago.sdk.android.coremethods.domain.utils.Result as MPResult
 import com.mercadopago.sdk.android.coremethods.ui.components.textfield.cardnumber.CardNumberTextFieldEvent
 import com.mercadopago.sdk.android.coremethods.ui.components.textfield.cardnumber.xml.CardNumberTextField
+import com.mercadopago.sdk.android.coremethods.ui.components.textfield.expirationdate.ExpirationDateTextFieldEvent
 import com.mercadopago.sdk.android.coremethods.ui.components.textfield.expirationdate.xml.ExpirationDateTextField
+import com.mercadopago.sdk.android.coremethods.ui.components.textfield.securitycode.SecurityCodeTextFieldEvent
 import com.mercadopago.sdk.android.coremethods.ui.components.textfield.securitycode.xml.SecurityCodeTextField
 import com.mercadopago.sdk.android.initializer.MercadoPagoSDK
 import kotlinx.coroutines.CoroutineScope
@@ -63,12 +72,24 @@ class CardCheckoutActivity : ComponentActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var errorText: TextView
 
-    @Volatile
-    private var paymentMethodId: String = ""
+    @Volatile private var paymentMethodId: String = ""
     private var paymentRequestId: String = ""
     private var serviceRequestId: String = ""
     private var amountCents: Long = 0L
     private var amountFormatted: String = ""
+
+    private var cardValid = false
+    private var expirationValid = false
+    private var securityValid = false
+    private var loading = false
+
+    private val bg = Color.rgb(246, 248, 252)
+    private val surface = Color.WHITE
+    private val text = Color.rgb(23, 35, 61)
+    private val muted = Color.rgb(104, 120, 144)
+    private val blue = Color.rgb(47, 103, 232)
+    private val line = Color.rgb(225, 232, 241)
+    private val danger = Color.rgb(190, 45, 45)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,13 +100,7 @@ class CardCheckoutActivity : ComponentActivity() {
         amountFormatted = intent.getStringExtra(EXTRA_AMOUNT_FORMATTED).orEmpty()
 
         if (paymentRequestId.isBlank() || amountCents <= 0L) {
-            finishWith(
-                status = "ERROR",
-                paymentId = "",
-                paymentStatus = "",
-                message = "La sesión de cobro no es válida.",
-                errorCode = "INVALID_CARD_SESSION",
-            )
+            finishWith("ERROR", "", "", "La sesión de cobro no es válida.", "INVALID_CARD_SESSION")
             return
         }
 
@@ -96,8 +111,12 @@ class CardCheckoutActivity : ComponentActivity() {
             return
         }
 
+        window.statusBarColor = bg
+        window.navigationBarColor = bg
+
         buildUi()
         configureCardFields()
+        updatePayState()
     }
 
     override fun onDestroy() {
@@ -106,106 +125,232 @@ class CardCheckoutActivity : ComponentActivity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(24), dp(24), dp(24))
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            setBackgroundColor(bg)
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
 
-        root.addView(TextView(this).apply {
-            text = "Pago con tarjeta"
-            textSize = 24f
-            setTypeface(typeface, Typeface.BOLD)
-        })
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), dp(28))
+        }
 
-        root.addView(TextView(this).apply {
-            text = if (amountFormatted.isNotBlank()) amountFormatted else formatAmount(amountCents)
-            textSize = 22f
-            setTypeface(typeface, Typeface.BOLD)
-            setPadding(0, dp(8), 0, dp(20))
-        })
-
-        root.addView(label("Número de tarjeta"))
-        cardNumber = CardNumberTextField(this)
-        root.addView(cardNumber, fullWidth(dp(56)))
-
-        val row = LinearLayout(this).apply {
+        // Header aligned with the rest of Soluciona.
+        val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(14), 0, 0)
+            minimumHeight = dp(50)
+        }
+        topBar.addView(TextView(this).apply {
+            text = "←"
+            textSize = 23f
+            gravity = Gravity.CENTER
+            setTextColor(text)
+            setPadding(dp(2), 0, dp(12), 0)
+            setOnClickListener {
+                finishWith("CANCELLED", "", "", "Pago cancelado.", "USER_CANCELLED")
+            }
+        }, LinearLayout.LayoutParams(dp(42), dp(42)))
+
+        topBar.addView(TextView(this).apply {
+            text = "Soluciona."
+            textSize = 21f
+            setTextColor(text)
+            setTypeface(typeface, Typeface.BOLD)
+            letterSpacing = -0.015f
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        content.addView(topBar)
+
+        content.addView(TextView(this).apply {
+            text = "Pago con tarjeta"
+            textSize = 25f
+            setTextColor(text)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(12), 0, dp(3))
+        })
+
+        content.addView(TextView(this).apply {
+            text = "Completá los datos para finalizar el servicio."
+            textSize = 13.5f
+            setTextColor(muted)
+            setPadding(0, 0, 0, dp(14))
+        })
+
+        // Compact payment summary.
+        val summary = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedDrawable(surface, line, 1, 16)
+            setPadding(dp(15), dp(13), dp(15), dp(13))
+        }
+        summary.addView(TextView(this).apply {
+            text = "TOTAL A PAGAR"
+            textSize = 10.5f
+            setTextColor(muted)
+            setTypeface(typeface, Typeface.BOLD)
+            letterSpacing = .08f
+        })
+        summary.addView(TextView(this).apply {
+            text = if (amountFormatted.isNotBlank()) amountFormatted else formatAmount(amountCents)
+            textSize = 24f
+            setTextColor(text)
+            setTypeface(typeface, Typeface.BOLD)
+            setPadding(0, dp(2), 0, 0)
+        })
+        content.addView(summary, fullWidth(LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        content.addView(sectionTitle("Datos de la tarjeta"))
+
+        val cardPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedDrawable(surface, line, 1, 16)
+            setPadding(dp(13), dp(12), dp(13), dp(13))
+        }
+
+        cardPanel.addView(label("Número de tarjeta"))
+        cardNumber = CardNumberTextField(this).apply {
+            background = roundedDrawable(Color.rgb(250, 251, 253), line, 1, 12)
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        cardPanel.addView(cardNumber, fullWidth(dp(50)).apply { topMargin = dp(5) })
+
+        val split = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
 
         val left = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(label("Vencimiento"))
         }
-        expiration = ExpirationDateTextField(this)
-        left.addView(expiration, fullWidth(dp(56)))
+        expiration = ExpirationDateTextField(this).apply {
+            background = roundedDrawable(Color.rgb(250, 251, 253), line, 1, 12)
+            setPadding(dp(10), 0, dp(10), 0)
+        }
+        left.addView(expiration, fullWidth(dp(50)).apply { topMargin = dp(5) })
 
         val right = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), 0, 0, 0)
+            setPadding(dp(9), 0, 0, 0)
             addView(label("Código de seguridad"))
         }
-        security = SecurityCodeTextField(this)
-        right.addView(security, fullWidth(dp(56)))
-
-        row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        root.addView(row)
-
-        root.addView(label("Nombre del titular").apply { setPadding(0, dp(18), 0, dp(6)) })
-        holderName = EditText(this).apply {
-            hint = "Como figura en la tarjeta"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
-            setSingleLine(true)
+        security = SecurityCodeTextField(this).apply {
+            background = roundedDrawable(Color.rgb(250, 251, 253), line, 1, 12)
+            setPadding(dp(10), 0, dp(10), 0)
         }
-        root.addView(holderName, fullWidth(dp(56)))
+        right.addView(security, fullWidth(dp(50)).apply { topMargin = dp(5) })
 
-        root.addView(label("DNI").apply { setPadding(0, dp(14), 0, dp(6)) })
-        documentNumber = EditText(this).apply {
-            hint = "Número de documento"
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setSingleLine(true)
-        }
-        root.addView(documentNumber, fullWidth(dp(56)))
+        split.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        split.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        cardPanel.addView(split, fullWidth(LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(11) })
+
+        cardPanel.addView(label("Nombre del titular").apply { setPadding(0, dp(11), 0, 0) })
+        holderName = standardEditText(
+            hint = "Como figura en la tarjeta",
+            input = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS,
+        )
+        cardPanel.addView(holderName, fullWidth(dp(50)).apply { topMargin = dp(5) })
+
+        cardPanel.addView(label("DNI").apply { setPadding(0, dp(11), 0, 0) })
+        documentNumber = standardEditText(
+            hint = "Número de documento",
+            input = InputType.TYPE_CLASS_NUMBER,
+        )
+        cardPanel.addView(documentNumber, fullWidth(dp(50)).apply { topMargin = dp(5) })
+
+        content.addView(cardPanel, fullWidth(LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        content.addView(TextView(this).apply {
+            text = "🔒  Pago seguro procesado por Mercado Pago"
+            textSize = 12f
+            setTextColor(muted)
+            setPadding(dp(2), dp(10), dp(2), 0)
+        })
 
         errorText = TextView(this).apply {
             visibility = View.GONE
-            setPadding(0, dp(14), 0, dp(8))
+            textSize = 12.5f
+            setTextColor(danger)
+            background = roundedDrawable(Color.rgb(255, 246, 246), Color.rgb(244, 211, 211), 1, 11)
+            setPadding(dp(11), dp(9), dp(11), dp(9))
         }
-        root.addView(errorText, fullWidth(LinearLayout.LayoutParams.WRAP_CONTENT))
+        content.addView(errorText, fullWidth(LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
 
         progress = ProgressBar(this).apply {
             visibility = View.GONE
+            indeterminateTintList = ColorStateList.valueOf(blue)
         }
-        root.addView(progress, LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+        content.addView(progress, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
             gravity = Gravity.CENTER_HORIZONTAL
             topMargin = dp(12)
         })
 
         payButton = Button(this).apply {
             text = "Pagar ${if (amountFormatted.isNotBlank()) amountFormatted else formatAmount(amountCents)}"
+            textSize = 14.5f
+            setTextColor(Color.WHITE)
+            setTypeface(typeface, Typeface.BOLD)
+            isAllCaps = false
+            background = roundedDrawable(blue, blue, 0, 12)
+            elevation = dp(2).toFloat()
             setOnClickListener { tokenizeAndPay() }
         }
-        root.addView(payButton, fullWidth(dp(56)).apply { topMargin = dp(18) })
+        content.addView(payButton, fullWidth(dp(50)).apply { topMargin = dp(14) })
 
-        val cancel = Button(this).apply {
+        val cancel = TextView(this).apply {
             text = "Cancelar"
+            gravity = Gravity.CENTER
+            textSize = 14f
+            setTextColor(blue)
+            setTypeface(typeface, Typeface.BOLD)
+            background = roundedDrawable(Color.TRANSPARENT, line, 1, 12)
             setOnClickListener {
                 finishWith("CANCELLED", "", "", "Pago cancelado.", "USER_CANCELLED")
             }
         }
-        root.addView(cancel, fullWidth(dp(52)).apply { topMargin = dp(8) })
+        content.addView(cancel, fullWidth(dp(46)).apply { topMargin = dp(8) })
 
-        setContentView(root)
+        content.addView(Space(this), fullWidth(dp(12)))
+
+        holderName.addSimpleWatcher { updatePayState() }
+        documentNumber.addSimpleWatcher { updatePayState() }
+
+        scroll.addView(content)
+        setContentView(scroll)
     }
 
     private fun configureCardFields() {
         cardNumber.onEvent = { event ->
-            if (event is CardNumberTextFieldEvent.OnBinChanged) {
-                val bin = event.cardBin.orEmpty()
-                if (bin.length >= 6) resolvePaymentMethod(bin)
-                else paymentMethodId = ""
+            when (event) {
+                is CardNumberTextFieldEvent.OnBinChanged -> {
+                    val bin = event.cardBin.orEmpty()
+                    if (bin.length >= 6) resolvePaymentMethod(bin) else {
+                        paymentMethodId = ""
+                        updatePayState()
+                    }
+                }
+                is CardNumberTextFieldEvent.IsValid -> {
+                    cardValid = event.isValid
+                    updatePayState()
+                }
+            }
+        }
+
+        expiration.onEvent = { event ->
+            when (event) {
+                is ExpirationDateTextFieldEvent.IsValid -> {
+                    expirationValid = event.isValid
+                    updatePayState()
+                }
+            }
+        }
+
+        security.onEvent = { event ->
+            when (event) {
+                is SecurityCodeTextFieldEvent.IsValid -> {
+                    securityValid = event.isValid
+                    updatePayState()
+                }
             }
         }
     }
@@ -234,18 +379,38 @@ class CardCheckoutActivity : ComponentActivity() {
                 paymentMethodId = ""
                 Log.e("SolucionaPayments", "Error resolviendo medio de pago", t)
             }
+            updatePayState()
         }
+    }
+
+    private fun updatePayState() {
+        if (!::payButton.isInitialized) return
+        val holderOk = ::holderName.isInitialized && holderName.text?.toString()?.trim()?.isNotEmpty() == true
+        val dniOk = ::documentNumber.isInitialized && documentNumber.text?.toString()?.trim()?.length?.let { it >= 7 } == true
+        val ready = !loading && cardValid && expirationValid && securityValid &&
+            paymentMethodId.isNotBlank() && holderOk && dniOk
+        payButton.isEnabled = ready
+        payButton.alpha = if (ready) 1f else .46f
     }
 
     private fun tokenizeAndPay() {
         val name = holderName.text?.toString()?.trim().orEmpty()
         val document = documentNumber.text?.toString()?.trim().orEmpty()
+
+        if (!cardValid || !expirationValid || !securityValid) {
+            showError("Revisá los datos de la tarjeta.")
+            return
+        }
         if (name.isBlank()) {
             showError("Ingresá el nombre del titular.")
             return
         }
         if (document.length < 7) {
             showError("Ingresá un DNI válido.")
+            return
+        }
+        if (paymentMethodId.isBlank()) {
+            showError("No pudimos identificar la tarjeta. Revisá el número e intentá nuevamente.")
             return
         }
 
@@ -332,7 +497,9 @@ class CardCheckoutActivity : ComponentActivity() {
                                     "El pago quedó en proceso. Revisá el estado en unos instantes.",
                                     "PAYMENT_PENDING",
                                 )
-                                else -> showError(response.message.ifBlank { "Mercado Pago rechazó el pago." })
+                                else -> showError(
+                                    response.message.ifBlank { "Mercado Pago rechazó el pago." }
+                                )
                             }
                         } else {
                             showError(response.message.ifBlank { "No se pudo procesar el pago." })
@@ -346,11 +513,16 @@ class CardCheckoutActivity : ComponentActivity() {
             }
     }
 
-    private fun postCardPayment(firebaseToken: String, cardToken: String, methodId: String): ApiPaymentResponse {
+    private fun postCardPayment(
+        firebaseToken: String,
+        cardToken: String,
+        methodId: String,
+    ): ApiPaymentResponse {
         var connection: HttpURLConnection? = null
         return try {
             val base = BuildConfig.MARKETPLACE_API_URL.replace(Regex("/+$"), "")
-            val url = URL("$base/v1/payment-requests/${java.net.URLEncoder.encode(paymentRequestId, "UTF-8")}/card-pay")
+            val encoded = java.net.URLEncoder.encode(paymentRequestId, "UTF-8")
+            val url = URL("$base/v1/payment-requests/$encoded/card-pay")
             connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.connectTimeout = 20_000
@@ -371,9 +543,11 @@ class CardCheckoutActivity : ComponentActivity() {
             connection.outputStream.use { out: OutputStream -> out.write(body) }
 
             val code = connection.responseCode
-            val stream: InputStream? = if (code in 200..299) connection.inputStream else connection.errorStream
+            val stream: InputStream? =
+                if (code in 200..299) connection.inputStream else connection.errorStream
             val payloadText = readAll(stream)
             val payload = if (payloadText.isBlank()) JSONObject() else JSONObject(payloadText)
+
             ApiPaymentResponse(
                 ok = code in 200..299,
                 paymentId = payload.optString("paymentId", ""),
@@ -393,10 +567,13 @@ class CardCheckoutActivity : ComponentActivity() {
         is ResultError.Validation -> error.message
     }
 
-    private fun setLoading(loading: Boolean) {
-        payButton.isEnabled = !loading
-        progress.visibility = if (loading) View.VISIBLE else View.GONE
-        if (loading) errorText.visibility = View.GONE
+    private fun setLoading(value: Boolean) {
+        loading = value
+        progress.visibility = if (value) View.VISIBLE else View.GONE
+        if (value) errorText.visibility = View.GONE
+        payButton.text = if (value) "Procesando…" else
+            "Pagar ${if (amountFormatted.isNotBlank()) amountFormatted else formatAmount(amountCents)}"
+        updatePayState()
     }
 
     private fun showError(message: String) {
@@ -424,9 +601,50 @@ class CardCheckoutActivity : ComponentActivity() {
         finish()
     }
 
-    private fun label(text: String) = TextView(this).apply {
-        this.text = text
+    private fun sectionTitle(value: String) = TextView(this).apply {
+        text = value
+        textSize = 15f
+        setTextColor(text)
+        setTypeface(typeface, Typeface.BOLD)
+        setPadding(dp(1), dp(18), 0, dp(8))
+    }
+
+    private fun label(value: String) = TextView(this).apply {
+        text = value
+        textSize = 12f
+        setTextColor(muted)
+        setTypeface(typeface, Typeface.BOLD)
+    }
+
+    private fun standardEditText(hint: String, input: Int) = EditText(this).apply {
+        this.hint = hint
+        inputType = input
+        setSingleLine(true)
         textSize = 14f
+        setTextColor(text)
+        setHintTextColor(Color.rgb(151, 164, 183))
+        background = roundedDrawable(Color.rgb(250, 251, 253), line, 1, 12)
+        setPadding(dp(12), 0, dp(12), 0)
+    }
+
+    private fun EditText.addSimpleWatcher(after: () -> Unit) {
+        addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, afterCount: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) = after()
+        })
+    }
+
+    private fun roundedDrawable(
+        fill: Int,
+        stroke: Int,
+        strokeDp: Int,
+        radiusDp: Int,
+    ) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(fill)
+        cornerRadius = dp(radiusDp).toFloat()
+        if (strokeDp > 0) setStroke(dp(strokeDp), stroke)
     }
 
     private fun fullWidth(height: Int) = LinearLayout.LayoutParams(
@@ -434,9 +652,11 @@ class CardCheckoutActivity : ComponentActivity() {
         height,
     )
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun dp(value: Int): Int =
+        (value * resources.displayMetrics.density).toInt()
 
-    private fun formatAmount(cents: Long): String = "$ " + String.format("%,.2f", cents / 100.0)
+    private fun formatAmount(cents: Long): String =
+        "$ " + String.format("%,.2f", cents / 100.0)
 
     private fun readAll(input: InputStream?): String {
         if (input == null) return ""
