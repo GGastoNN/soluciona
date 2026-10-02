@@ -1,6 +1,16 @@
 package com.fixhome.soluciona;
 
+import android.Manifest;
+import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Build;
+import android.os.CancellationSignal;
+import android.os.Handler;
+import android.os.Looper;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -36,6 +46,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class FeaturesBridge {
     private static final String PREFS = "soluciona_features";
@@ -344,19 +355,202 @@ public final class FeaturesBridge {
     }
 
     @JavascriptInterface
+    public void requestCurrentLocation() {
+        activity.requestPaymentLocation();
+    }
+
+    void onLocationPermissionDenied() {
+        emitMessage(
+                "currentLocation",
+                false,
+                "Para generar el QR necesitamos la ubicación actual del servicio. Podés habilitarla y volver a intentar."
+        );
+    }
+
+    @SuppressLint("MissingPermission")
+    void captureCurrentLocation() {
+        boolean fine = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        boolean coarse = ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_COARSE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED;
+        if (!fine && !coarse) {
+            onLocationPermissionDenied();
+            return;
+        }
+
+        activity.runOnUiThread(() -> {
+            LocationManager manager = (LocationManager) activity.getSystemService(Context.LOCATION_SERVICE);
+            if (manager == null) {
+                emitMessage("currentLocation", false, "No pudimos acceder al servicio de ubicación.");
+                return;
+            }
+
+            String provider = null;
+            try {
+                if (fine && manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                    provider = LocationManager.GPS_PROVIDER;
+                } else if (manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                    provider = LocationManager.NETWORK_PROVIDER;
+                } else if (manager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                    provider = LocationManager.GPS_PROVIDER;
+                }
+            } catch (Exception ignored) {
+            }
+
+            if (provider == null) {
+                emitMessage("currentLocation", false, "Activá la ubicación del teléfono para generar el QR.");
+                return;
+            }
+
+            final Location fallback = bestLastKnownLocation(manager);
+            final Handler handler = new Handler(Looper.getMainLooper());
+            final AtomicBoolean delivered = new AtomicBoolean(false);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                final CancellationSignal signal = new CancellationSignal();
+                final Runnable timeout = () -> {
+                    if (!delivered.compareAndSet(false, true)) return;
+                    signal.cancel();
+                    if (isRecentLocation(fallback)) emitCurrentLocation(fallback);
+                    else emitMessage("currentLocation", false,
+                            "No pudimos obtener tu ubicación actual. Revisá GPS/ubicación e intentá nuevamente.");
+                };
+                handler.postDelayed(timeout, 12_000L);
+                try {
+                    manager.getCurrentLocation(
+                            provider,
+                            signal,
+                            ContextCompat.getMainExecutor(activity),
+                            location -> {
+                                if (!delivered.compareAndSet(false, true)) return;
+                                handler.removeCallbacks(timeout);
+                                if (location != null) emitCurrentLocation(location);
+                                else if (isRecentLocation(fallback)) emitCurrentLocation(fallback);
+                                else emitMessage("currentLocation", false,
+                                        "No pudimos obtener tu ubicación actual. Intentá nuevamente.");
+                            }
+                    );
+                } catch (Exception e) {
+                    handler.removeCallbacks(timeout);
+                    if (delivered.compareAndSet(false, true)) {
+                        if (isRecentLocation(fallback)) emitCurrentLocation(fallback);
+                        else emitMessage("currentLocation", false, "No pudimos obtener tu ubicación actual.");
+                    }
+                }
+                return;
+            }
+
+            final LocationListener[] holder = new LocationListener[1];
+            final Runnable timeout = () -> {
+                if (!delivered.compareAndSet(false, true)) return;
+                try {
+                    if (holder[0] != null) manager.removeUpdates(holder[0]);
+                } catch (Exception ignored) {
+                }
+                if (isRecentLocation(fallback)) emitCurrentLocation(fallback);
+                else emitMessage("currentLocation", false,
+                        "No pudimos obtener tu ubicación actual. Revisá GPS/ubicación e intentá nuevamente.");
+            };
+            holder[0] = location -> {
+                if (!delivered.compareAndSet(false, true)) return;
+                handler.removeCallbacks(timeout);
+                try {
+                    manager.removeUpdates(holder[0]);
+                } catch (Exception ignored) {
+                }
+                if (location != null) emitCurrentLocation(location);
+                else if (isRecentLocation(fallback)) emitCurrentLocation(fallback);
+                else emitMessage("currentLocation", false, "No pudimos obtener tu ubicación actual.");
+            };
+
+            handler.postDelayed(timeout, 12_000L);
+            try {
+                manager.requestSingleUpdate(provider, holder[0], Looper.getMainLooper());
+            } catch (Exception e) {
+                handler.removeCallbacks(timeout);
+                if (delivered.compareAndSet(false, true)) {
+                    if (isRecentLocation(fallback)) emitCurrentLocation(fallback);
+                    else emitMessage("currentLocation", false, "No pudimos obtener tu ubicación actual.");
+                }
+            }
+        });
+    }
+
+    @SuppressLint("MissingPermission")
+    private Location bestLastKnownLocation(LocationManager manager) {
+        Location best = null;
+        String[] providers = new String[]{
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER
+        };
+        for (String provider : providers) {
+            try {
+                Location candidate = manager.getLastKnownLocation(provider);
+                if (candidate == null) continue;
+                if (best == null
+                        || candidate.getTime() > best.getTime()
+                        || (candidate.getTime() == best.getTime()
+                        && candidate.getAccuracy() < best.getAccuracy())) {
+                    best = candidate;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return best;
+    }
+
+    private boolean isRecentLocation(Location location) {
+        return location != null
+                && location.getLatitude() >= -90 && location.getLatitude() <= 90
+                && location.getLongitude() >= -180 && location.getLongitude() <= 180
+                && Math.abs(System.currentTimeMillis() - location.getTime()) <= 3 * 60_000L;
+    }
+
+    private void emitCurrentLocation(Location location) {
+        JSONObject p = new JSONObject();
+        try {
+            p.put("latitude", location.getLatitude());
+            p.put("longitude", location.getLongitude());
+            p.put("accuracyMeters", Math.max(0f, location.getAccuracy()));
+            p.put("capturedAt", location.getTime());
+        } catch (Exception ignored) {
+        }
+        emit("currentLocation", true, p);
+    }
+
+    @JavascriptInterface
     public void createPaymentQr(String requestId, String amountText) {
+        emitMessage(
+                "paymentQr",
+                false,
+                "Actualizá Soluciona: el cobro QR ahora requiere la ubicación actual del servicio."
+        );
+    }
+
+    @JavascriptInterface
+    public void createPaymentQrAtLocation(String requestId, String amountText,
+                                          String latitudeText, String longitudeText) {
         try {
             double amount = Double.parseDouble(amountText.replace(",", "."));
+            double latitude = Double.parseDouble(latitudeText);
+            double longitude = Double.parseDouble(longitudeText);
             if (amount <= 0) {
                 emitMessage("paymentQr", false, "Ingresá un importe válido.");
+                return;
+            }
+            if (!Double.isFinite(latitude) || latitude < -90 || latitude > 90
+                    || !Double.isFinite(longitude) || longitude < -180 || longitude > 180) {
+                emitMessage("paymentQr", false, "No pudimos validar la ubicación actual.");
                 return;
             }
             JSONObject body = new JSONObject();
             body.put("requestId", requestId);
             body.put("amount", String.format(Locale.US, "%.2f", amount));
+            body.put("latitude", latitude);
+            body.put("longitude", longitude);
             api("POST", "/v1/payments/qr", body, "paymentQr", null);
         } catch (Exception e) {
-            emitMessage("paymentQr", false, "Ingresá un importe válido.");
+            emitMessage("paymentQr", false, "Revisá el importe y la ubicación antes de generar el QR.");
         }
     }
 

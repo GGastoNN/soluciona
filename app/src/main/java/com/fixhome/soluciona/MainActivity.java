@@ -1,6 +1,8 @@
 package com.fixhome.soluciona;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.net.Uri;
@@ -37,6 +39,7 @@ import java.nio.charset.StandardCharsets;
 public class MainActivity extends FragmentActivity {
     private static final String TAG = "SolucionaStartup";
     private static final int FILE_CHOOSER_REQUEST = 1001;
+    private static final int LOCATION_PERMISSION_REQUEST = 1002;
     private static final long MIN_SPLASH_MS = 950L;
 
     private WebView webView;
@@ -615,6 +618,44 @@ public class MainActivity extends FragmentActivity {
         // Firebase/Firestore after the biometric gate; persisting the WebView can leave
         // a restored page stuck on "Conectando con Soluciona…" without re-running boot.
         super.onSaveInstanceState(outState);
+    }
+
+    void requestPaymentLocation() {
+        runOnUiThread(() -> {
+            boolean fine = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+                    == PackageManager.PERMISSION_GRANTED;
+            boolean coarse = checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+                    == PackageManager.PERMISSION_GRANTED;
+
+            if (!fine && !coarse) {
+                requestPermissions(
+                        new String[]{
+                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                Manifest.permission.ACCESS_COARSE_LOCATION
+                        },
+                        LOCATION_PERMISSION_REQUEST
+                );
+                return;
+            }
+            if (featuresBridge != null) featuresBridge.captureCurrentLocation();
+        });
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != LOCATION_PERMISSION_REQUEST) return;
+
+        boolean granted = false;
+        for (int result : grantResults) {
+            if (result == PackageManager.PERMISSION_GRANTED) {
+                granted = true;
+                break;
+            }
+        }
+        if (featuresBridge == null) return;
+        if (granted) featuresBridge.captureCurrentLocation();
+        else featuresBridge.onLocationPermissionDenied();
     }
 
     @Override
