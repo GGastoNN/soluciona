@@ -40,6 +40,7 @@ public class MainActivity extends FragmentActivity {
     private static final String TAG = "SolucionaStartup";
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private static final int LOCATION_PERMISSION_REQUEST = 1002;
+    private static final int CARD_CHECKOUT_REQUEST = 1003;
     private static final long MIN_SPLASH_MS = 950L;
 
     private WebView webView;
@@ -658,9 +659,34 @@ public class MainActivity extends FragmentActivity {
         else featuresBridge.onLocationPermissionDenied();
     }
 
+
+    void launchCardCheckout(String orderId, String clientToken,
+                            String paymentRequestId, String serviceRequestId) {
+        runOnUiThread(() -> {
+            try {
+                Intent intent = new Intent(this, CardCheckoutActivity.class);
+                intent.putExtra(CardCheckoutActivity.EXTRA_ORDER_ID, orderId);
+                intent.putExtra(CardCheckoutActivity.EXTRA_CLIENT_TOKEN, clientToken);
+                intent.putExtra(CardCheckoutActivity.EXTRA_PAYMENT_REQUEST_ID, paymentRequestId);
+                intent.putExtra(CardCheckoutActivity.EXTRA_SERVICE_REQUEST_ID, serviceRequestId);
+                startActivityForResult(intent, CARD_CHECKOUT_REQUEST);
+            } catch (Exception e) {
+                if (featuresBridge != null) {
+                    featuresBridge.onCardCheckoutLaunchFailed();
+                }
+            }
+        });
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == CARD_CHECKOUT_REQUEST) {
+            if (featuresBridge != null) {
+                featuresBridge.onCardCheckoutResult(resultCode, data);
+            }
+            return;
+        }
         if (requestCode == FirebaseBridge.PROFESSIONAL_DOCUMENT_REQUEST) {
             if (resultCode == RESULT_OK && data != null && data.getData() != null && bridge != null) {
                 bridge.onProfessionalDocumentPicked(data.getData());

@@ -86,6 +86,7 @@ public final class FeaturesBridge {
             p.put("biometricAvailable", canAuthenticateBiometric());
             p.put("biometricEnabled", isBiometricEnabledForCurrentUser());
             p.put("marketplaceConfigured", !BuildConfig.MARKETPLACE_API_URL.trim().isEmpty());
+            p.put("cardPaymentsConfigured", !BuildConfig.MP_PUBLIC_KEY.trim().isEmpty());
             FirebaseUser user = auth.getCurrentUser();
             p.put("signedIn", user != null);
         } catch (Exception ignored) {
@@ -255,6 +256,7 @@ public final class FeaturesBridge {
                         p.put("biometricAvailable", canAuthenticateBiometric());
                         p.put("biometricEnabled", isBiometricEnabledForCurrentUser());
                         p.put("marketplaceConfigured", !BuildConfig.MARKETPLACE_API_URL.trim().isEmpty());
+                        p.put("cardPaymentsConfigured", !BuildConfig.MP_PUBLIC_KEY.trim().isEmpty());
                     } catch (Exception ignored) {
                     }
                     if (!"PROFESSIONAL".equals(role)) {
@@ -519,39 +521,139 @@ public final class FeaturesBridge {
     }
 
     @JavascriptInterface
+    public void createPaymentRequest(String requestId, String amountText, String note) {
+        try {
+            double amount = Double.parseDouble(amountText.replace(",", "."));
+            if (amount <= 0) {
+                emitMessage("paymentRequestCreated", false, "Ingresá un importe válido.");
+                return;
+            }
+            JSONObject body = new JSONObject();
+            body.put("requestId", requestId == null ? "" : requestId.trim());
+            body.put("amount", String.format(Locale.US, "%.2f", amount));
+            body.put("note", note == null ? "" : note.trim());
+            api("POST", "/v1/payment-requests", body, "paymentRequestCreated", null);
+        } catch (Exception e) {
+            emitMessage("paymentRequestCreated", false, "Ingresá un importe válido.");
+        }
+    }
+
+    @JavascriptInterface
+    public void getPaymentRequestForService(String requestId) {
+        api(
+                "GET",
+                "/v1/payment-requests/by-service/" + Uri.encode(requestId),
+                null,
+                "paymentRequest",
+                null
+        );
+    }
+
+    @JavascriptInterface
+    public void startCardPayment(String paymentRequestId) {
+        if (BuildConfig.MP_PUBLIC_KEY.trim().isEmpty()) {
+            emitMessage("cardSession", false, "Falta configurar MP_PUBLIC_KEY en la aplicación.");
+            return;
+        }
+        api(
+                "POST",
+                "/v1/payment-requests/" + Uri.encode(paymentRequestId) + "/card-session",
+                new JSONObject(),
+                "cardSession",
+                payload -> {
+                    String orderId = payload.optString("orderId", "");
+                    String clientToken = payload.optString("clientToken", "");
+                    String serviceRequestId = payload.optString("requestId", "");
+                    if (orderId.isEmpty() || clientToken.isEmpty()) {
+                        emitMessage("cardSession", false, "Mercado Pago no devolvió una sesión de tarjeta válida.");
+                        return;
+                    }
+                    activity.launchCardCheckout(
+                            orderId,
+                            clientToken,
+                            paymentRequestId,
+                            serviceRequestId
+                    );
+                }
+        );
+    }
+
+    @JavascriptInterface
+    public void createPaymentRequestQr(String paymentRequestId,
+                                       String latitudeText, String longitudeText) {
+        try {
+            double latitude = Double.parseDouble(latitudeText);
+            double longitude = Double.parseDouble(longitudeText);
+            if (!Double.isFinite(latitude) || latitude < -90 || latitude > 90
+                    || !Double.isFinite(longitude) || longitude < -180 || longitude > 180) {
+                emitMessage("paymentRequestQr", false, "No pudimos validar la ubicación actual.");
+                return;
+            }
+            JSONObject body = new JSONObject();
+            body.put("latitude", latitude);
+            body.put("longitude", longitude);
+            api(
+                    "POST",
+                    "/v1/payment-requests/" + Uri.encode(paymentRequestId) + "/qr",
+                    body,
+                    "paymentRequestQr",
+                    null
+            );
+        } catch (Exception e) {
+            emitMessage("paymentRequestQr", false, "No pudimos validar la ubicación actual.");
+        }
+    }
+
+    void onCardCheckoutLaunchFailed() {
+        emitMessage("cardCheckoutResult", false, "No se pudo abrir el pago con tarjeta.");
+    }
+
+    void onCardCheckoutResult(int resultCode, Intent data) {
+        JSONObject p = new JSONObject();
+        try {
+            String status = data == null ? "CANCELLED"
+                    : data.getStringExtra(CardCheckoutActivity.RESULT_STATUS);
+            String orderStatus = data == null ? ""
+                    : data.getStringExtra(CardCheckoutActivity.RESULT_ORDER_STATUS);
+            String orderId = data == null ? ""
+                    : data.getStringExtra(CardCheckoutActivity.RESULT_ORDER_ID);
+            String message = data == null ? "Pago cancelado."
+                    : data.getStringExtra(CardCheckoutActivity.RESULT_MESSAGE);
+            String paymentRequestId = data == null ? ""
+                    : data.getStringExtra(CardCheckoutActivity.EXTRA_PAYMENT_REQUEST_ID);
+            String serviceRequestId = data == null ? ""
+                    : data.getStringExtra(CardCheckoutActivity.EXTRA_SERVICE_REQUEST_ID);
+
+            p.put("status", status == null ? "" : status);
+            p.put("orderStatus", orderStatus == null ? "" : orderStatus);
+            p.put("orderId", orderId == null ? "" : orderId);
+            p.put("message", message == null ? "" : message);
+            p.put("paymentRequestId", paymentRequestId == null ? "" : paymentRequestId);
+            p.put("requestId", serviceRequestId == null ? "" : serviceRequestId);
+        } catch (Exception ignored) {
+        }
+        emit("cardCheckoutResult", true, p);
+    }
+
+    // Legacy 0.8.x helpers kept to avoid crashing an older WebView asset during
+    // rolling upgrades. New UI uses payment requests above.
+    @JavascriptInterface
     public void createPaymentQr(String requestId, String amountText) {
         emitMessage(
                 "paymentQr",
                 false,
-                "Actualizá Soluciona: el cobro QR ahora requiere la ubicación actual del servicio."
+                "Actualizá Soluciona: el cobro ahora se envía primero al cliente."
         );
     }
 
     @JavascriptInterface
     public void createPaymentQrAtLocation(String requestId, String amountText,
                                           String latitudeText, String longitudeText) {
-        try {
-            double amount = Double.parseDouble(amountText.replace(",", "."));
-            double latitude = Double.parseDouble(latitudeText);
-            double longitude = Double.parseDouble(longitudeText);
-            if (amount <= 0) {
-                emitMessage("paymentQr", false, "Ingresá un importe válido.");
-                return;
-            }
-            if (!Double.isFinite(latitude) || latitude < -90 || latitude > 90
-                    || !Double.isFinite(longitude) || longitude < -180 || longitude > 180) {
-                emitMessage("paymentQr", false, "No pudimos validar la ubicación actual.");
-                return;
-            }
-            JSONObject body = new JSONObject();
-            body.put("requestId", requestId);
-            body.put("amount", String.format(Locale.US, "%.2f", amount));
-            body.put("latitude", latitude);
-            body.put("longitude", longitude);
-            api("POST", "/v1/payments/qr", body, "paymentQr", null);
-        } catch (Exception e) {
-            emitMessage("paymentQr", false, "Revisá el importe y la ubicación antes de generar el QR.");
-        }
+        emitMessage(
+                "paymentQr",
+                false,
+                "Actualizá Soluciona: el cobro ahora se envía primero al cliente."
+        );
     }
 
     @JavascriptInterface
