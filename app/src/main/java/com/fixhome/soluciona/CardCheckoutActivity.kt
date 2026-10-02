@@ -85,7 +85,7 @@ class CardCheckoutActivity : ComponentActivity() {
 
     private val bg = Color.rgb(246, 248, 252)
     private val surface = Color.WHITE
-    private val text = Color.rgb(23, 35, 61)
+    private val textColor = Color.rgb(23, 35, 61)
     private val muted = Color.rgb(104, 120, 144)
     private val blue = Color.rgb(47, 103, 232)
     private val line = Color.rgb(225, 232, 241)
@@ -136,7 +136,6 @@ class CardCheckoutActivity : ComponentActivity() {
             setPadding(dp(18), dp(8), dp(18), dp(28))
         }
 
-        // Header aligned with the rest of Soluciona.
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -146,7 +145,7 @@ class CardCheckoutActivity : ComponentActivity() {
             text = "←"
             textSize = 23f
             gravity = Gravity.CENTER
-            setTextColor(text)
+            setTextColor(textColor)
             setPadding(dp(2), 0, dp(12), 0)
             setOnClickListener {
                 finishWith("CANCELLED", "", "", "Pago cancelado.", "USER_CANCELLED")
@@ -156,7 +155,7 @@ class CardCheckoutActivity : ComponentActivity() {
         topBar.addView(TextView(this).apply {
             text = "Soluciona."
             textSize = 21f
-            setTextColor(text)
+            setTextColor(textColor)
             setTypeface(typeface, Typeface.BOLD)
             letterSpacing = -0.015f
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -165,7 +164,7 @@ class CardCheckoutActivity : ComponentActivity() {
         content.addView(TextView(this).apply {
             text = "Pago con tarjeta"
             textSize = 25f
-            setTextColor(text)
+            setTextColor(textColor)
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, dp(12), 0, dp(3))
         })
@@ -177,7 +176,6 @@ class CardCheckoutActivity : ComponentActivity() {
             setPadding(0, 0, 0, dp(14))
         })
 
-        // Compact payment summary.
         val summary = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = roundedDrawable(surface, line, 1, 16)
@@ -193,7 +191,7 @@ class CardCheckoutActivity : ComponentActivity() {
         summary.addView(TextView(this).apply {
             text = if (amountFormatted.isNotBlank()) amountFormatted else formatAmount(amountCents)
             textSize = 24f
-            setTextColor(text)
+            setTextColor(textColor)
             setTypeface(typeface, Typeface.BOLD)
             setPadding(0, dp(2), 0, 0)
         })
@@ -604,7 +602,7 @@ class CardCheckoutActivity : ComponentActivity() {
     private fun sectionTitle(value: String) = TextView(this).apply {
         text = value
         textSize = 15f
-        setTextColor(text)
+        setTextColor(textColor)
         setTypeface(typeface, Typeface.BOLD)
         setPadding(dp(1), dp(18), 0, dp(8))
     }
@@ -621,7 +619,7 @@ class CardCheckoutActivity : ComponentActivity() {
         inputType = input
         setSingleLine(true)
         textSize = 14f
-        setTextColor(text)
+        setTextColor(textColor)
         setHintTextColor(Color.rgb(151, 164, 183))
         background = roundedDrawable(Color.rgb(250, 251, 253), line, 1, 12)
         setPadding(dp(12), 0, dp(12), 0)
