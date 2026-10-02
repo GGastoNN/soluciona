@@ -635,11 +635,12 @@ async function createPaymentRequestQr(
   const accessToken = await validSellerAccessToken(seller, env);
   const idempotencyKey = crypto.randomUUID();
 
-  const order = await mpFetch("https://api.mercadopago.com/v1/orders", accessToken, {
+  const order = await mpFetchWithTransientRetry("https://api.mercadopago.com/v1/orders", accessToken, {
     method: "POST",
     idempotencyKey,
     body: {
       type: "qr",
+      processing_mode: "automatic",
       total_amount: amountDecimal,
       description: "Servicio Soluciona",
       external_reference: paymentRequest.request_id,
@@ -1376,6 +1377,22 @@ async function mpOAuthExchange(env: Env, values: Record<string, string>) {
   return data;
 }
 
+async function mpFetchWithTransientRetry(url: string, token: string, options: {
+  method: string;
+  body?: any;
+  idempotencyKey?: string;
+}) {
+  try {
+    return await mpFetch(url, token, options);
+  } catch (error: any) {
+    // Orders QR can return transient 5xx errors. Retrying with the SAME
+    // idempotency key is safe and avoids creating a duplicate order.
+    if (Number(error?.upstreamStatus || 0) < 500) throw error;
+    await new Promise(resolve => setTimeout(resolve, 350));
+    return mpFetch(url, token, options);
+  }
+}
+
 async function mpFetch(url: string, token: string, options: {
   method: string;
   body?: any;
@@ -1395,9 +1412,25 @@ async function mpFetch(url: string, token: string, options: {
   });
   const data = await response.json<any>().catch(() => ({}));
   if (!response.ok) {
-    throw httpError(response.status >= 500 ? 502 : response.status,
+    const upstreamMessage = String(
+      data?.message || data?.error || `Mercado Pago respondió ${response.status}.`
+    );
+    console.error("Mercado Pago API error", {
+      method: options.method,
+      url,
+      status: response.status,
+      error: data?.error || null,
+      message: upstreamMessage,
+      cause: data?.cause || null
+    });
+    const error: any = httpError(
+      response.status >= 500 ? 502 : response.status,
       "MERCADO_PAGO_ERROR",
-      String(data?.message || data?.error || `Mercado Pago respondió ${response.status}.`));
+      upstreamMessage
+    );
+    error.upstreamStatus = response.status;
+    error.upstreamCode = data?.error || null;
+    throw error;
   }
   return data;
 }
