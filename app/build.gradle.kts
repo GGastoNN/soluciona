@@ -119,6 +119,7 @@ dependencies {
     implementation("com.google.android.ump:user-messaging-platform:4.0.0")
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation("androidx.compose.runtime:runtime")
     implementation(platform("com.mercadopago.android.sdk:sdk-android-bom:1.0.0"))
     implementation("com.mercadopago.android.sdk:sdk-android")
     implementation("com.mercadopago.android.sdk:checkout")
