@@ -331,6 +331,10 @@ class CardCheckoutActivity : ComponentActivity() {
                     cardValid = event.isValid
                     updatePayState()
                 }
+                is CardNumberTextFieldEvent.OnLastFourDigitsFilled -> {
+                    cardValid = true
+                    updatePayState()
+                }
             }
         }
 
@@ -340,6 +344,10 @@ class CardCheckoutActivity : ComponentActivity() {
                     expirationValid = event.isValid
                     updatePayState()
                 }
+                is ExpirationDateTextFieldEvent.OnInputFilled -> {
+                    if (event.isFilled) expirationValid = true
+                    updatePayState()
+                }
             }
         }
 
@@ -347,6 +355,10 @@ class CardCheckoutActivity : ComponentActivity() {
             when (event) {
                 is SecurityCodeTextFieldEvent.IsValid -> {
                     securityValid = event.isValid
+                    updatePayState()
+                }
+                is SecurityCodeTextFieldEvent.OnInputFilled -> {
+                    if (event.isFilled) securityValid = true
                     updatePayState()
                 }
             }
@@ -386,7 +398,7 @@ class CardCheckoutActivity : ComponentActivity() {
         val holderOk = ::holderName.isInitialized && holderName.text?.toString()?.trim()?.isNotEmpty() == true
         val dniOk = ::documentNumber.isInitialized && documentNumber.text?.toString()?.trim()?.length?.let { it >= 7 } == true
         val ready = !loading && cardValid && expirationValid && securityValid &&
-            paymentMethodId.isNotBlank() && holderOk && dniOk
+            holderOk && dniOk
         payButton.isEnabled = ready
         payButton.alpha = if (ready) 1f else .46f
     }
@@ -407,11 +419,6 @@ class CardCheckoutActivity : ComponentActivity() {
             showError("Ingresá un DNI válido.")
             return
         }
-        if (paymentMethodId.isBlank()) {
-            showError("No pudimos identificar la tarjeta. Revisá el número e intentá nuevamente.")
-            return
-        }
-
         setLoading(true)
         scope.launch {
             try {
