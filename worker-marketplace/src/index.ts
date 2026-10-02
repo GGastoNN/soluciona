@@ -37,7 +37,7 @@ export default {
       const url = new URL(request.url);
 
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "soluciona-marketplace", version: "0.9.0" });
+        return json({ ok: true, service: "soluciona-marketplace", version: "0.9.1" });
       }
 
       if (url.pathname === "/v1/mp/callback" && request.method === "GET") {
