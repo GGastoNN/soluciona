@@ -555,6 +555,14 @@ public final class FeaturesBridge {
             emitMessage("cardSession", false, "Falta configurar MP_PUBLIC_KEY en la aplicación.");
             return;
         }
+        if (!SolucionaApplication.isMercadoPagoReady()) {
+            String detail = SolucionaApplication.mercadoPagoInitError();
+            if (detail == null || detail.trim().isEmpty()) {
+                detail = "El SDK de Mercado Pago no quedó inicializado.";
+            }
+            emitMessage("cardSession", false, detail);
+            return;
+        }
         api(
                 "POST",
                 "/v1/payment-requests/" + Uri.encode(paymentRequestId) + "/card-session",
@@ -619,6 +627,8 @@ public final class FeaturesBridge {
                     : data.getStringExtra(CardCheckoutActivity.RESULT_ORDER_ID);
             String message = data == null ? "Pago cancelado."
                     : data.getStringExtra(CardCheckoutActivity.RESULT_MESSAGE);
+            String errorCode = data == null ? ""
+                    : data.getStringExtra(CardCheckoutActivity.RESULT_ERROR_CODE);
             String paymentRequestId = data == null ? ""
                     : data.getStringExtra(CardCheckoutActivity.EXTRA_PAYMENT_REQUEST_ID);
             String serviceRequestId = data == null ? ""
@@ -628,6 +638,7 @@ public final class FeaturesBridge {
             p.put("orderStatus", orderStatus == null ? "" : orderStatus);
             p.put("orderId", orderId == null ? "" : orderId);
             p.put("message", message == null ? "" : message);
+            p.put("errorCode", errorCode == null ? "" : errorCode);
             p.put("paymentRequestId", paymentRequestId == null ? "" : paymentRequestId);
             p.put("requestId", serviceRequestId == null ? "" : serviceRequestId);
         } catch (Exception ignored) {
