@@ -1,4 +1,4 @@
-name = "soluciona-dev-api"
+name = "soluciona-app"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
 
