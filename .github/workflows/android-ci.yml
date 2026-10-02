@@ -65,21 +65,23 @@ jobs:
         env:
           DOCUMENTS_API_URL: ${{ vars.DOCUMENTS_API_URL }}
           MARKETPLACE_API_URL: ${{ vars.MARKETPLACE_API_URL }}
+          MP_PUBLIC_KEY: ${{ vars.MP_PUBLIC_KEY }}
         shell: bash
         run: |
           echo "Marketplace API configured: $([ -n "$MARKETPLACE_API_URL" ] && echo yes || echo no)"
           echo "Documents API configured: $([ -n "$DOCUMENTS_API_URL" ] && echo yes || echo no)"
           gradle --no-daemon :app:assembleDebug \
             -PDOCUMENTS_API_URL="$DOCUMENTS_API_URL" \
-            -PMARKETPLACE_API_URL="$MARKETPLACE_API_URL"
+            -PMARKETPLACE_API_URL="$MARKETPLACE_API_URL" \
+            -PMP_PUBLIC_KEY="$MP_PUBLIC_KEY"
 
       - name: Copy APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.8.8-debug.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk Soluciona-0.9.0-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: Soluciona-0.8.8-debug
-          path: Soluciona-0.8.8-debug.apk
+          name: Soluciona-0.9.0-debug
+          path: Soluciona-0.9.0-debug.apk
           if-no-files-found: error
           retention-days: 14
