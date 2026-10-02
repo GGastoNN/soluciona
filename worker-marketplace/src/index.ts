@@ -38,7 +38,7 @@ export default {
       const url = new URL(request.url);
 
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "soluciona-marketplace", version: "0.9.1" });
+        return json({ ok: true, service: "soluciona-marketplace", version: "0.9.2" });
       }
 
       if (url.pathname === "/v1/mp/callback" && request.method === "GET") {
@@ -239,24 +239,56 @@ async function marketplaceDisconnect(identity: Identity, env: Env): Promise<Resp
     });
   }
 
-  // No eliminamos la conexión mientras haya un intento vivo.
-  // El backend/webhook todavía puede necesitar las credenciales del profesional.
-  const active = await env.DB.prepare(`
+  // Antes de bloquear la desvinculación, sincronizamos los intentos que todavía
+  // figuran como CREATED. Esto evita que un QR/pago ya vencido o rechazado deje
+  // la cuenta vinculada para siempre.
+  const activeAttempts = await env.DB.prepare(`
+    SELECT *
+    FROM payment_attempts
+    WHERE professional_uid=? AND status='CREATED'
+    ORDER BY created_at DESC
+    LIMIT 20
+  `).bind(identity.uid).all<PaymentAttemptRow>();
+
+  for (const attempt of activeAttempts.results || []) {
+    const paymentRequest = await getPaymentRequestRow(attempt.payment_request_id, env);
+    if (!paymentRequest) {
+      // Registro huérfano: si tiene más de 26 horas, lo cerramos localmente.
+      if (Date.now() - Number(attempt.created_at || 0) > 26 * 60 * 60 * 1000) {
+        await env.DB.prepare(
+          "UPDATE payment_attempts SET status='EXPIRED',updated_at=? WHERE id=?"
+        ).bind(Date.now(), attempt.id).run();
+      }
+      continue;
+    }
+
+    try {
+      await syncPlatformAttempt(attempt, paymentRequest, env);
+    } catch (error) {
+      console.warn("No se pudo sincronizar intento antes de desvincular", attempt.id, error);
+      // Un intento de prueba muy antiguo no debe bloquear indefinidamente.
+      if (Date.now() - Number(attempt.created_at || 0) > 26 * 60 * 60 * 1000) {
+        await env.DB.prepare(
+          "UPDATE payment_attempts SET status='EXPIRED',updated_at=? WHERE id=?"
+        ).bind(Date.now(), attempt.id).run();
+      }
+    }
+  }
+
+  const stillActive = await env.DB.prepare(`
     SELECT COUNT(*) AS total
     FROM payment_attempts
     WHERE professional_uid=? AND status='CREATED'
   `).bind(identity.uid).first<{ total: number }>();
 
-  if (Number(active?.total || 0) > 0) {
+  if (Number(stillActive?.total || 0) > 0) {
     throw httpError(
       409,
       "PAYMENT_IN_PROGRESS",
-      "No podés desvincular Mercado Pago mientras haya un intento de pago activo."
+      "Todavía hay un pago o QR activo. Esperá a que finalice o venza y volvé a intentar."
     );
   }
 
-  // Elimina estados OAuth pendientes y las credenciales cifradas almacenadas
-  // por Soluciona para este profesional.
   await env.DB.prepare("DELETE FROM oauth_states WHERE uid=?")
     .bind(identity.uid)
     .run();
