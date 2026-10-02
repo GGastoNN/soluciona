@@ -29,7 +29,9 @@ class CardCheckoutActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (savedInstanceState == null) launchCheckout()
+        if (savedInstanceState == null) {
+            launchCheckout()
+        }
     }
 
     private fun launchCheckout() {
@@ -40,17 +42,36 @@ class CardCheckoutActivity : ComponentActivity() {
         val clientToken = intent.getStringExtra(EXTRA_CLIENT_TOKEN).orEmpty()
 
         if (orderId.isBlank() || clientToken.isBlank()) {
-            finishWith("ERROR", orderId, "", "Falta la sesión de pago.", "INVALID_SESSION")
+            finishWith(
+                status = "ERROR",
+                orderId = orderId,
+                orderStatus = "",
+                message = "Falta la sesión de pago.",
+                errorCode = "INVALID_SESSION",
+            )
             return
         }
 
         if (!SolucionaApplication.isMercadoPagoReady()) {
             val detail = SolucionaApplication.mercadoPagoInitError()
                 .ifBlank { "El SDK de Mercado Pago no quedó inicializado." }
-            Log.e("SolucionaPayments", detail)
-            finishWith("ERROR", orderId, "", detail, "SDK_NOT_INITIALIZED")
+
+            Log.e("SolucionaPayments", "Mercado Pago SDK no inicializado: $detail")
+
+            finishWith(
+                status = "ERROR",
+                orderId = orderId,
+                orderStatus = "",
+                message = "SDK_NOT_INITIALIZED: $detail",
+                errorCode = "SDK_NOT_INITIALIZED",
+            )
             return
         }
+
+        Log.i(
+            "SolucionaPayments",
+            "Abriendo CardTransaction orderId=$orderId clientTokenPresent=${clientToken.isNotBlank()}",
+        )
 
         try {
             val checkout = MercadoPagoCheckout.Builder(
@@ -61,13 +82,22 @@ class CardCheckoutActivity : ComponentActivity() {
                         clientToken = clientToken,
                     ),
                 ),
-            ).setPaymentMethodConfiguration(listOf(MPPaymentMethodConfig.Card()))
+            )
+                .setPaymentMethodConfiguration(
+                    listOf(MPPaymentMethodConfig.Card())
+                )
                 .build()
 
             checkout.show { result ->
                 when (result) {
                     is MercadoPagoCheckoutResult.Success -> {
                         val data = result.paymentData
+
+                        Log.i(
+                            "SolucionaPayments",
+                            "MP checkout success orderId=${data.orderId} status=${data.orderStatus}",
+                        )
+
                         finishWith(
                             status = "SUCCESS",
                             orderId = data.orderId,
@@ -79,26 +109,56 @@ class CardCheckoutActivity : ComponentActivity() {
 
                     is MercadoPagoCheckoutResult.Error -> {
                         val error = result.error
+
                         val code = error.errorCode.toString()
-                        val message = error.errorMessage.ifBlank {
-                            "No se pudo procesar la tarjeta."
+                        val message = error.errorMessage
+                            .takeIf { it.isNotBlank() }
+                            ?: "No se pudo procesar la tarjeta."
+
+                        val localized = error.errorLocalized?.toString()
+                            ?.takeIf { it.isNotBlank() }
+                            ?: "sin detalle"
+
+                        val cause = error.errorCause?.toString()
+                            ?.takeIf { it.isNotBlank() }
+                            ?: "sin detalle"
+
+                        val detail = buildString {
+                            append(code)
+                            append(": ")
+                            append(message)
+                            append("\nEtapa: ")
+                            append(localized)
+                            append("\nCausa: ")
+                            append(cause)
                         }
+
                         Log.e(
                             "SolucionaPayments",
-                            "MP checkout error code=$code localized=${error.errorLocalized} message=$message cause=${error.errorCause}",
+                            "MP checkout error " +
+                                "orderId=$orderId " +
+                                "code=$code " +
+                                "message=$message " +
+                                "localized=$localized " +
+                                "cause=$cause",
                             error,
                         )
+
                         finishWith(
                             status = "ERROR",
                             orderId = orderId,
                             orderStatus = "",
-                            message = "$code: $message",
+                            message = detail,
                             errorCode = code,
                         )
                     }
 
                     is MercadoPagoCheckoutResult.UserCancelled -> {
-                        Log.i("SolucionaPayments", "Checkout cancelado por el usuario: ${result.cancelledData}")
+                        Log.i(
+                            "SolucionaPayments",
+                            "Checkout cancelado por el usuario: ${result.cancelledData}",
+                        )
+
                         finishWith(
                             status = "CANCELLED",
                             orderId = orderId,
@@ -110,9 +170,16 @@ class CardCheckoutActivity : ComponentActivity() {
                 }
             }
         } catch (t: Throwable) {
-            val detail = t.message?.takeIf { it.isNotBlank() }
+            val detail = t.message
+                ?.takeIf { it.isNotBlank() }
                 ?: t::class.java.simpleName
-            Log.e("SolucionaPayments", "No se pudo abrir Mercado Pago checkout: $detail", t)
+
+            Log.e(
+                "SolucionaPayments",
+                "No se pudo abrir Mercado Pago checkout: $detail",
+                t,
+            )
+
             finishWith(
                 status = "ERROR",
                 orderId = orderId,
@@ -136,9 +203,16 @@ class CardCheckoutActivity : ComponentActivity() {
             putExtra(RESULT_ORDER_STATUS, orderStatus)
             putExtra(RESULT_MESSAGE, message)
             putExtra(RESULT_ERROR_CODE, errorCode)
-            putExtra(EXTRA_PAYMENT_REQUEST_ID, intent.getStringExtra(EXTRA_PAYMENT_REQUEST_ID))
-            putExtra(EXTRA_SERVICE_REQUEST_ID, intent.getStringExtra(EXTRA_SERVICE_REQUEST_ID))
+            putExtra(
+                EXTRA_PAYMENT_REQUEST_ID,
+                intent.getStringExtra(EXTRA_PAYMENT_REQUEST_ID),
+            )
+            putExtra(
+                EXTRA_SERVICE_REQUEST_ID,
+                intent.getStringExtra(EXTRA_SERVICE_REQUEST_ID),
+            )
         }
+
         setResult(Activity.RESULT_OK, data)
         finish()
     }
