@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS sellers (
   mp_user_id TEXT NOT NULL,
   access_token_enc TEXT NOT NULL,
   refresh_token_enc TEXT,
+  public_key TEXT,
   expires_at INTEGER,
   store_id TEXT,
   pos_id TEXT,
