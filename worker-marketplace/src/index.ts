@@ -172,10 +172,9 @@ async function handleMpCallback(url: URL, env: Env): Promise<Response> {
     const refreshEnc = refreshToken ? await encryptSecret(refreshToken, env) : null;
     const expiresAt = tokenData.expires_in ? Date.now() + Number(tokenData.expires_in) * 1000 : null;
     const mpUserId = String(tokenData.user_id || "");
-    const publicKey = String(tokenData.public_key || "").trim();
+    const publicKey = String(tokenData.public_key || "").trim() || null;
 
     if (!mpUserId) throw new Error("Mercado Pago no devolvió user_id.");
-    if (!publicKey) throw new Error("Mercado Pago no devolvió public_key del vendedor.");
 
     await env.DB.prepare(`
       INSERT INTO sellers(uid,mp_user_id,access_token_enc,refresh_token_enc,public_key,expires_at,connected_at,updated_at)
@@ -490,11 +489,6 @@ async function createCardSession(
     const seller = await getSeller(paymentRequest.professional_uid, env);
     if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
     const accessToken = await validSellerAccessToken(seller, env);
-    const refreshedSeller = await getSeller(paymentRequest.professional_uid, env);
-    const sellerPublicKey = String(refreshedSeller?.public_key || "").trim();
-    if (!sellerPublicKey) {
-      throw httpError(409, "MP_PUBLIC_KEY_MISSING", "El profesional debe reconectar Mercado Pago para actualizar su clave pública.");
-    }
     const current = await mpFetch(
       `https://api.mercadopago.com/v1/orders/${encodeURIComponent(existing.mp_order_id)}`,
       accessToken,
@@ -512,7 +506,6 @@ async function createCardSession(
         requestId: paymentRequest.request_id,
         orderId: existing.mp_order_id,
         clientToken,
-        sellerPublicKey,
         amountFormatted: formatArs(paymentRequest.amount_cents)
       });
     }
@@ -521,11 +514,6 @@ async function createCardSession(
   const seller = await getSeller(paymentRequest.professional_uid, env);
   if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
   const accessToken = await validSellerAccessToken(seller, env);
-  const refreshedSeller = await getSeller(paymentRequest.professional_uid, env);
-  const sellerPublicKey = String(refreshedSeller?.public_key || "").trim();
-  if (!sellerPublicKey) {
-    throw httpError(409, "MP_PUBLIC_KEY_MISSING", "El profesional debe reconectar Mercado Pago para actualizar su clave pública.");
-  }
   const commissionBps = await commissionForProfessional(paymentRequest.professional_uid, env);
   const feeCents = Math.round(paymentRequest.amount_cents * commissionBps / 10000);
   const amountDecimal = centsToDecimal(paymentRequest.amount_cents);
@@ -574,7 +562,6 @@ async function createCardSession(
     requestId: paymentRequest.request_id,
     orderId,
     clientToken,
-    sellerPublicKey,
     amountFormatted: formatArs(paymentRequest.amount_cents)
   });
 }
