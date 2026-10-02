@@ -571,14 +571,20 @@ public final class FeaturesBridge {
                 payload -> {
                     String orderId = payload.optString("orderId", "");
                     String clientToken = payload.optString("clientToken", "");
+                    String sellerPublicKey = payload.optString("sellerPublicKey", "");
                     String serviceRequestId = payload.optString("requestId", "");
                     if (orderId.isEmpty() || clientToken.isEmpty()) {
                         emitMessage("cardSession", false, "Mercado Pago no devolvió una sesión de tarjeta válida.");
                         return;
                     }
+                    if (sellerPublicKey.isEmpty()) {
+                        emitMessage("cardSession", false, "Falta la Public Key del profesional. Volvé a vincular Mercado Pago.");
+                        return;
+                    }
                     activity.launchCardCheckout(
                             orderId,
                             clientToken,
+                            sellerPublicKey,
                             paymentRequestId,
                             serviceRequestId
                     );
