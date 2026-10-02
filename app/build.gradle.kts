@@ -120,6 +120,7 @@ dependencies {
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.runtime:runtime")
+    implementation("androidx.compose.ui:ui")
 
     implementation(platform("com.mercadopago.android.sdk:sdk-android-bom:1.0.0"))
     implementation("com.mercadopago.android.sdk:sdk-android")
