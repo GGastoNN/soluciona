@@ -357,6 +357,17 @@ public final class FeaturesBridge {
     }
 
     @JavascriptInterface
+    public void disconnectMercadoPago() {
+        api(
+                "POST",
+                "/v1/mp/disconnect",
+                new JSONObject(),
+                "marketplaceDisconnect",
+                null
+        );
+    }
+
+    @JavascriptInterface
     public void requestCurrentLocation() {
         activity.requestPaymentLocation();
     }
