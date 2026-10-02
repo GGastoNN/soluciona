@@ -84,6 +84,14 @@
     .sol-location-warn{color:var(--warn);font-weight:800}
     .sol-mini-btn{border:1px solid var(--line);background:var(--card);color:var(--blue);border-radius:11px;padding:8px 10px;font-weight:800;font-size:12px}
     .sol-spin{width:16px;height:16px;border:2px solid #cbd5e1;border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px;margin-right:6px}
+    .sol-confirm-backdrop{position:fixed;inset:0;background:#020617a8;z-index:110;display:flex;align-items:center;justify-content:center;padding:22px}
+    .sol-confirm-card{width:min(430px,100%);background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:22px;padding:20px;box-shadow:0 24px 70px #0007}
+    .sol-confirm-icon{width:46px;height:46px;border-radius:14px;background:#fff1f2;color:#b91c1c;display:grid;place-items:center;font-size:22px;margin-bottom:14px}
+    .sol-confirm-card h3{margin:0 0 7px;font-size:20px;letter-spacing:-.4px}
+    .sol-confirm-card p{margin:0;color:var(--muted);font-size:13.5px;line-height:1.5}
+    .sol-confirm-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px}
+    .sol-confirm-actions .btn{margin:0}
+    .sol-confirm-error{display:none;margin-top:12px;padding:10px 11px;border-radius:11px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:12.5px;line-height:1.4}
   `;
   document.head.appendChild(style);
 
@@ -176,6 +184,28 @@
         updateChargeButton();
       }
 
+      if (event === 'marketplaceDisconnect') {
+        const message = payload.message || 'No se pudo desvincular Mercado Pago.';
+        const confirm = document.getElementById('sol-mp-disconnect-confirm');
+        const errorBox = document.getElementById('sol-mp-disconnect-error');
+        const confirmBtn = document.getElementById('sol-mp-disconnect-confirm-btn');
+        const cancelBtn = document.getElementById('sol-mp-disconnect-cancel-btn');
+        if (confirm) {
+          if (errorBox) {
+            errorBox.textContent = message;
+            errorBox.style.display = 'block';
+          }
+          if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Sí, desvincular';
+          }
+          if (cancelBtn) cancelBtn.disabled = false;
+        } else {
+          featureToast(message, true);
+        }
+        return;
+      }
+
       featureToast(payload.message || 'No se pudo completar la operación.', true);
       return;
     }
@@ -247,6 +277,7 @@
       return;
     }
     if (event === 'marketplaceDisconnect') {
+      document.getElementById('sol-mp-disconnect-confirm')?.remove();
       extra.mp = {
         connected: false,
         mpUserId: '',
@@ -258,6 +289,9 @@
       const modal = document.getElementById('sol-mp-modal');
       if (modal) renderMpModal();
       requestRerender();
+      setTimeout(() => {
+        try { F.getMarketplaceStatus(); } catch (_) {}
+      }, 350);
       return;
     }
     if (event === 'currentLocation') {
@@ -823,21 +857,65 @@
   }
 
   window.solConfirmDisconnectMercadoPago = function() {
-    const approved = window.confirm(
-      '¿Desvincular Mercado Pago?\n\n' +
-      'Soluciona dejará de usar esta conexión para nuevos cobros. ' +
-      'Tendrás que volver a autorizar Mercado Pago para cobrar nuevamente.'
-    );
+    document.getElementById('sol-mp-disconnect-confirm')?.remove();
 
-    if (!approved) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'sol-mp-disconnect-confirm';
+    wrap.className = 'sol-confirm-backdrop';
+    wrap.onclick = e => {
+      if (e.target === wrap) window.solCancelDisconnectMercadoPago();
+    };
+    wrap.innerHTML = `<div class="sol-confirm-card" role="dialog" aria-modal="true" aria-labelledby="sol-mp-disconnect-title">
+      <div class="sol-confirm-icon">↔</div>
+      <h3 id="sol-mp-disconnect-title">Desvincular Mercado Pago</h3>
+      <p>
+        Soluciona dejará de usar esta cuenta para nuevos cobros.
+        Para volver a cobrar vas a tener que autorizar Mercado Pago nuevamente.
+      </p>
+      <div class="notice warn" style="margin-top:14px">
+        Los pagos ya confirmados no se modifican.
+      </div>
+      <div id="sol-mp-disconnect-error" class="sol-confirm-error"></div>
+      <div class="sol-confirm-actions">
+        <button id="sol-mp-disconnect-cancel-btn" class="btn secondary" onclick="solCancelDisconnectMercadoPago()">Cancelar</button>
+        <button id="sol-mp-disconnect-confirm-btn" class="btn dangerBtn" onclick="solExecuteDisconnectMercadoPago()">Sí, desvincular</button>
+      </div>
+    </div>`;
+    document.body.appendChild(wrap);
+  };
 
-    const btn = document.getElementById('sol-mp-disconnect-btn');
+  window.solCancelDisconnectMercadoPago = function() {
+    document.getElementById('sol-mp-disconnect-confirm')?.remove();
+  };
+
+  window.solExecuteDisconnectMercadoPago = function() {
+    const btn = document.getElementById('sol-mp-disconnect-confirm-btn');
+    const cancelBtn = document.getElementById('sol-mp-disconnect-cancel-btn');
+    const errorBox = document.getElementById('sol-mp-disconnect-error');
+
+    if (errorBox) {
+      errorBox.textContent = '';
+      errorBox.style.display = 'none';
+    }
     if (btn) {
       btn.disabled = true;
       btn.textContent = 'Desvinculando…';
     }
+    if (cancelBtn) cancelBtn.disabled = true;
 
-    F.disconnectMercadoPago();
+    try {
+      F.disconnectMercadoPago();
+    } catch (_) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Sí, desvincular';
+      }
+      if (cancelBtn) cancelBtn.disabled = false;
+      if (errorBox) {
+        errorBox.textContent = 'No pudimos iniciar la desvinculación. Cerrá y volvé a abrir Soluciona.';
+        errorBox.style.display = 'block';
+      }
+    }
   };
 
   function renderMpModal() {
