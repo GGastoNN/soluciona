@@ -3,6 +3,7 @@ package com.fixhome.soluciona
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import com.mercadopago.sdk.android.checkout.core.MercadoPagoCheckout
 import com.mercadopago.sdk.android.checkout.core.model.MPCheckoutType
@@ -65,7 +66,10 @@ class CardCheckoutActivity : ComponentActivity() {
                 }
 
                 is MercadoPagoCheckoutResult.Error -> {
-                    // No devolvemos detalles internos del gateway a la WebView.
+                    // Keep gateway details in Logcat for diagnosis, but do not expose
+                    // them to the WebView/UI. Mercado Pago errors can otherwise look
+                    // like the checkout simply opened and immediately closed.
+                    Log.e("SolucionaPayments", "Mercado Pago checkout error: $result")
                     finishWith(
                         status = "ERROR",
                         orderId = orderId,
