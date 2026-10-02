@@ -10,14 +10,11 @@ import com.mercadopago.sdk.android.checkout.core.model.MPCheckoutType
 import com.mercadopago.sdk.android.checkout.core.model.MPOrder
 import com.mercadopago.sdk.android.checkout.core.model.MPPaymentMethodConfig
 import com.mercadopago.sdk.android.checkout.domain.callback.MercadoPagoCheckoutResult
-import com.mercadopago.sdk.android.domain.model.CountryCode
-import com.mercadopago.sdk.android.initializer.MercadoPagoSDK
 
 class CardCheckoutActivity : ComponentActivity() {
     companion object {
         const val EXTRA_ORDER_ID = "order_id"
         const val EXTRA_CLIENT_TOKEN = "client_token"
-        const val EXTRA_SELLER_PUBLIC_KEY = "seller_public_key"
         const val EXTRA_PAYMENT_REQUEST_ID = "payment_request_id"
         const val EXTRA_SERVICE_REQUEST_ID = "service_request_id"
 
@@ -43,7 +40,6 @@ class CardCheckoutActivity : ComponentActivity() {
 
         val orderId = intent.getStringExtra(EXTRA_ORDER_ID).orEmpty()
         val clientToken = intent.getStringExtra(EXTRA_CLIENT_TOKEN).orEmpty()
-        val sellerPublicKey = intent.getStringExtra(EXTRA_SELLER_PUBLIC_KEY).orEmpty().trim()
 
         if (orderId.isBlank() || clientToken.isBlank()) {
             finishWith(
@@ -52,17 +48,6 @@ class CardCheckoutActivity : ComponentActivity() {
                 orderStatus = "",
                 message = "Falta la sesión de pago.",
                 errorCode = "INVALID_SESSION",
-            )
-            return
-        }
-
-        if (sellerPublicKey.isBlank()) {
-            finishWith(
-                status = "ERROR",
-                orderId = orderId,
-                orderStatus = "",
-                message = "Falta la Public Key del profesional. Volvé a vincular Mercado Pago.",
-                errorCode = "SELLER_PUBLIC_KEY_MISSING",
             )
             return
         }
@@ -89,15 +74,6 @@ class CardCheckoutActivity : ComponentActivity() {
         )
 
         try {
-            MercadoPagoSDK.setNewConfiguration(
-                publicKey = sellerPublicKey,
-                countryCode = CountryCode.ARG,
-            )
-            Log.i(
-                "SolucionaPayments",
-                "SDK configurado con Public Key del vendedor (key=${sellerPublicKey.take(8)}…).",
-            )
-
             val checkout = MercadoPagoCheckout.Builder(
                 context = this,
                 checkoutType = MPCheckoutType.CardTransaction(

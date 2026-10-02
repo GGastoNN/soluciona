@@ -660,14 +660,13 @@ public class MainActivity extends FragmentActivity {
     }
 
 
-    void launchCardCheckout(String orderId, String clientToken, String sellerPublicKey,
+    void launchCardCheckout(String orderId, String clientToken,
                             String paymentRequestId, String serviceRequestId) {
         runOnUiThread(() -> {
             try {
                 Intent intent = new Intent(this, CardCheckoutActivity.class);
                 intent.putExtra(CardCheckoutActivity.EXTRA_ORDER_ID, orderId);
                 intent.putExtra(CardCheckoutActivity.EXTRA_CLIENT_TOKEN, clientToken);
-                intent.putExtra(CardCheckoutActivity.EXTRA_SELLER_PUBLIC_KEY, sellerPublicKey);
                 intent.putExtra(CardCheckoutActivity.EXTRA_PAYMENT_REQUEST_ID, paymentRequestId);
                 intent.putExtra(CardCheckoutActivity.EXTRA_SERVICE_REQUEST_ID, serviceRequestId);
                 startActivityForResult(intent, CARD_CHECKOUT_REQUEST);
