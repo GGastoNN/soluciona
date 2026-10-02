@@ -37,7 +37,7 @@ export default {
       const url = new URL(request.url);
 
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "soluciona-marketplace", version: "0.8.0" });
+        return json({ ok: true, service: "soluciona-marketplace", version: "0.8.2" });
       }
 
       if (url.pathname === "/v1/mp/callback" && request.method === "GET") {
@@ -164,7 +164,11 @@ async function handleMpCallback(url: URL, env: Env): Promise<Response> {
         updated_at=excluded.updated_at
     `).bind(row.uid, mpUserId, accessEnc, refreshEnc, expiresAt, Date.now(), Date.now()).run();
 
-    await setupStoreAndPos(row.uid, env);
+    // Mobile professionals do not have a fixed point of sale. Store/POS setup
+    // is intentionally deferred until the first QR, when the app can provide the
+    // real current service location.
+    await env.DB.prepare("UPDATE sellers SET setup_error=NULL,updated_at=? WHERE uid=?")
+      .bind(Date.now(), row.uid).run();
     return callbackHtml(true, "Mercado Pago quedó conectado con Soluciona.");
   } catch (e: any) {
     console.error("OAuth callback failed", e);
@@ -182,49 +186,80 @@ async function marketplaceStatus(identity: Identity, env: Env): Promise<Response
   });
 }
 
-async function setupStoreAndPos(uid: string, env: Env): Promise<void> {
+async function syncStoreAndPosForService(
+  uid: string,
+  serviceAddress: any,
+  latitude: number,
+  longitude: number,
+  env: Env
+): Promise<void> {
   let seller = await getSeller(uid, env);
   if (!seller) throw new Error("Seller no encontrado.");
   const accessToken = await validSellerAccessToken(seller, env);
 
   try {
+    const streetName = String(serviceAddress?.street || "").trim();
+    const streetNumber = String(serviceAddress?.number || "").trim();
+    const cityName = String(serviceAddress?.city || "").trim();
+    const stateName = String(serviceAddress?.province || "").trim();
+
+    if (!streetName || !streetNumber || !cityName || !stateName) {
+      throw new Error("La dirección del servicio está incompleta. Revisá calle, número, ciudad y provincia.");
+    }
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+        || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      throw new Error("La ubicación actual del servicio no es válida.");
+    }
+
+    const externalStoreId = `SOLSTORE${shortId(uid)}`;
+    const location = {
+      street_name: streetName,
+      street_number: streetNumber,
+      city_name: cityName,
+      state_name: stateName,
+      latitude,
+      longitude,
+      reference: "Servicio a domicilio Soluciona"
+    };
+
     let storeId = seller.store_id;
     if (!storeId) {
-      const externalStoreId = `SOLSTORE${shortId(uid)}`;
-      const privateProfile = await firestoreGet(`users_private/${uid}`, env);
-      const address: any = privateProfile?.address || {};
-      const streetName = String(address.street || "").trim();
-      const streetNumber = String(address.number || "").trim();
-      const cityName = String(address.city || "").trim();
-      const stateName = String(address.province || "").trim();
-      if (!streetName || !streetNumber || !cityName || !stateName) {
-        throw new Error("Completá la dirección real del profesional antes de configurar el QR de Mercado Pago.");
-      }
       const storeResp = await mpFetch(
         `https://api.mercadopago.com/users/${encodeURIComponent(seller.mp_user_id)}/stores`,
         accessToken,
         {
           method: "POST",
           body: {
-            name: "Soluciona",
+            name: "Soluciona Movil",
             external_id: externalStoreId,
-            location: {
-              street_name: streetName,
-              street_number: streetNumber,
-              city_name: cityName,
-              state_name: stateName,
-              reference: "Punto de cobro profesional Soluciona"
-            }
+            location
           }
         }
       );
       storeId = String(storeResp.id || "");
-      if (!storeId) throw new Error("No se pudo crear la sucursal de Mercado Pago.");
+      if (!storeId) throw new Error("No se pudo crear la sucursal móvil de Mercado Pago.");
       await env.DB.prepare("UPDATE sellers SET store_id=?,updated_at=? WHERE uid=?")
         .bind(storeId, Date.now(), uid).run();
       seller = (await getSeller(uid, env))!;
+    } else {
+      // A professional may be working at a different client's address on every
+      // service. Keep the same Store/POS identity but synchronize the Store with
+      // the real current point of service before creating the QR.
+      await mpFetch(
+        `https://api.mercadopago.com/users/${encodeURIComponent(seller.mp_user_id)}/stores/${encodeURIComponent(storeId)}`,
+        accessToken,
+        {
+          method: "PUT",
+          body: {
+            name: "Soluciona Movil",
+            external_id: externalStoreId,
+            location
+          }
+        }
+      );
     }
 
+    seller = (await getSeller(uid, env))!;
     if (!seller.external_pos_id) {
       const externalPosId = `SOLPOS${shortId(uid)}`;
       const posResp = await mpFetch(
@@ -244,6 +279,9 @@ async function setupStoreAndPos(uid: string, env: Env): Promise<void> {
       await env.DB.prepare(
         "UPDATE sellers SET pos_id=?,external_pos_id=?,setup_error=NULL,updated_at=? WHERE uid=?"
       ).bind(String(posResp.id || ""), externalPosId, Date.now(), uid).run();
+    } else {
+      await env.DB.prepare("UPDATE sellers SET setup_error=NULL,updated_at=? WHERE uid=?")
+        .bind(Date.now(), uid).run();
     }
   } catch (e: any) {
     const message = String(e?.message || "Error configurando sucursal/caja.");
@@ -257,7 +295,13 @@ async function createPaymentQr(identity: Identity, request: Request, env: Env): 
   const body = await parseJson(request);
   const requestId = String(body.requestId || "").trim();
   const amount = parseMoney(String(body.amount || ""));
+  const latitude = Number(body.latitude);
+  const longitude = Number(body.longitude);
   if (!requestId || amount <= 0) throw httpError(400, "INVALID_PAYMENT", "Pedido o importe inválido.");
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+      || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw httpError(400, "LOCATION_REQUIRED", "Necesitamos la ubicación actual del servicio para generar el QR.");
+  }
 
   const role = await getUserRole(identity.uid, env);
   if (role !== "PROFESSIONAL") throw httpError(403, "PROFESSIONAL_ONLY", "Solo el profesional asignado puede generar el cobro.");
@@ -273,12 +317,18 @@ async function createPaymentQr(identity: Identity, request: Request, env: Env): 
 
   const seller = await getSeller(identity.uid, env);
   if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "Conectá Mercado Pago antes de cobrar.");
-  if (!seller.external_pos_id) {
-    await setupStoreAndPos(identity.uid, env);
-  }
+
+  const privateService = await firestoreGet(`service_request_private/${requestId}`, env);
+  const serviceAddress: any = privateService?.address || {};
+  await syncStoreAndPosForService(identity.uid, serviceAddress, latitude, longitude, env);
+
   const freshSeller = await getSeller(identity.uid, env);
   if (!freshSeller?.external_pos_id) {
-    throw httpError(409, "MP_POS_NOT_READY", freshSeller?.setup_error || "La caja de Mercado Pago todavía no está configurada.");
+    throw httpError(
+      409,
+      "MP_POS_NOT_READY",
+      freshSeller?.setup_error || "La caja de Mercado Pago todavía no está configurada."
+    );
   }
 
   const previous = await env.DB.prepare(
