@@ -65,6 +65,10 @@ export default {
         return marketplaceStatus(identity, env);
       }
 
+      if (url.pathname === "/v1/mp/disconnect" && request.method === "POST") {
+        return marketplaceDisconnect(identity, env);
+      }
+
       if (url.pathname === "/v1/payment-requests" && request.method === "POST") {
         return createPlatformPaymentRequest(identity, request, env);
       }
@@ -214,6 +218,56 @@ async function marketplaceStatus(identity: Identity, env: Env): Promise<Response
     publicKeyReady: !!seller?.public_key,
     posReady: !!seller?.external_pos_id,
     setupError: seller?.setup_error || ""
+  });
+}
+
+async function marketplaceDisconnect(identity: Identity, env: Env): Promise<Response> {
+  const role = await getUserRole(identity.uid, env);
+  if (role !== "PROFESSIONAL") {
+    throw httpError(
+      403,
+      "PROFESSIONAL_ONLY",
+      "Solo los profesionales pueden desvincular Mercado Pago."
+    );
+  }
+
+  const seller = await getSeller(identity.uid, env);
+  if (!seller) {
+    return json({
+      disconnected: true,
+      message: "Mercado Pago ya estaba desvinculado."
+    });
+  }
+
+  // No eliminamos la conexión mientras haya un intento vivo.
+  // El backend/webhook todavía puede necesitar las credenciales del profesional.
+  const active = await env.DB.prepare(`
+    SELECT COUNT(*) AS total
+    FROM payment_attempts
+    WHERE professional_uid=? AND status='CREATED'
+  `).bind(identity.uid).first<{ total: number }>();
+
+  if (Number(active?.total || 0) > 0) {
+    throw httpError(
+      409,
+      "PAYMENT_IN_PROGRESS",
+      "No podés desvincular Mercado Pago mientras haya un intento de pago activo."
+    );
+  }
+
+  // Elimina estados OAuth pendientes y las credenciales cifradas almacenadas
+  // por Soluciona para este profesional.
+  await env.DB.prepare("DELETE FROM oauth_states WHERE uid=?")
+    .bind(identity.uid)
+    .run();
+
+  await env.DB.prepare("DELETE FROM sellers WHERE uid=?")
+    .bind(identity.uid)
+    .run();
+
+  return json({
+    disconnected: true,
+    message: "Mercado Pago fue desvinculado de Soluciona."
   });
 }
 
