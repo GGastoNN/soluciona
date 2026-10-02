@@ -11,7 +11,8 @@
     zones: [],
     referrals: null,
     mp: null,
-    payment: null
+    payment: null,
+    charge: { requestId: '', amount: '', location: null, locating: false, locationError: '', pending: false }
   };
 
   let zonesLoadInFlight = false;
@@ -66,6 +67,21 @@
     .sol-kpi{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
     .sol-kpi>div{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;text-align:center}
     .sol-kpi b{display:block;font-size:20px}
+    .sol-charge-summary{padding:14px;border:1px solid var(--line);border-radius:16px;background:var(--card);margin-bottom:12px}
+    .sol-charge-summary b{display:block;font-size:15px}
+    .sol-money-box{display:flex;align-items:center;gap:8px;border:1.5px solid var(--line);border-radius:16px;background:var(--card);padding:9px 14px;margin:8px 0 5px}
+    .sol-money-box:focus-within{border-color:var(--blue);box-shadow:0 0 0 3px #2563eb15}
+    .sol-money-symbol{font-size:27px;font-weight:900;color:var(--muted)}
+    .sol-money-input{border:0!important;box-shadow:none!important;background:transparent!important;padding:5px 0!important;font-size:30px;font-weight:900;letter-spacing:-1px;min-width:0}
+    .sol-location-card{border:1px solid var(--line);background:var(--card);border-radius:16px;padding:13px;margin:12px 0}
+    .sol-location-head{display:flex;align-items:flex-start;gap:10px}
+    .sol-location-icon{width:38px;height:38px;border-radius:12px;background:var(--soft);display:grid;place-items:center;flex:none}
+    .sol-location-text{flex:1;min-width:0}
+    .sol-location-text b{display:block;font-size:14px}
+    .sol-location-ok{color:var(--ok);font-weight:800}
+    .sol-location-warn{color:var(--warn);font-weight:800}
+    .sol-mini-btn{border:1px solid var(--line);background:var(--card);color:var(--blue);border-radius:11px;padding:8px 10px;font-weight:800;font-size:12px}
+    .sol-spin{width:16px;height:16px;border:2px solid #cbd5e1;border-top-color:var(--blue);border-radius:50%;animation:spin .8s linear infinite;display:inline-block;vertical-align:-3px;margin-right:6px}
   `;
   document.head.appendChild(style);
 
@@ -125,6 +141,20 @@
       if (payload.message === 'NO_SESSION' &&
           ['bootstrap','referrals','marketplaceStatus','paymentStatus'].includes(event)) {
         return;
+      }
+      if (event === 'currentLocation') {
+        extra.charge.locating = false;
+        extra.charge.location = null;
+        extra.charge.locationError = payload.message || 'No pudimos obtener tu ubicación actual.';
+        updateChargeLocationUi();
+        updateChargeButton();
+        return;
+      }
+      if (event === 'paymentQr') {
+        extra.charge.pending = false;
+        const err = document.getElementById('sol-charge-error');
+        if (err) err.textContent = payload.message || 'No se pudo generar el QR.';
+        updateChargeButton();
       }
       featureToast(payload.message || 'No se pudo completar la operación.', true);
       return;
@@ -196,7 +226,20 @@
       featureToast('Continuá la vinculación en Mercado Pago.');
       return;
     }
+    if (event === 'currentLocation') {
+      extra.charge.locating = false;
+      extra.charge.locationError = '';
+      extra.charge.location = {
+        latitude: Number(payload.latitude),
+        longitude: Number(payload.longitude),
+        accuracyMeters: Number(payload.accuracyMeters || 0)
+      };
+      updateChargeLocationUi();
+      updateChargeButton();
+      return;
+    }
     if (event === 'paymentQr') {
+      extra.charge.pending = false;
       extra.payment = payload;
       renderPaymentModal();
       try { N.listProfessionalJobs(); } catch (_) {}
@@ -281,9 +324,172 @@
       openMpModal();
       return;
     }
-    const amount = prompt('Importe final del servicio (ARS)');
-    if (!amount) return;
-    F.createPaymentQr(requestId, amount);
+    openChargeModal(requestId);
+  };
+
+  function currentJob(requestId) {
+    try {
+      const lists = [state.jobs || [], state.requests || [], state.open || []];
+      for (const list of lists) {
+        const found = list.find(x => x.id === requestId);
+        if (found) return found;
+      }
+    } catch (_) {}
+    return {};
+  }
+
+  function openChargeModal(requestId) {
+    closeModal();
+    extra.charge = {
+      requestId,
+      amount: '',
+      location: null,
+      locating: true,
+      locationError: '',
+      pending: false
+    };
+    const job = currentJob(requestId);
+    const address = (() => {
+      try { return typeof addressText === 'function' ? addressText(job.address) : ''; }
+      catch (_) { return ''; }
+    })();
+
+    const wrap = document.createElement('div');
+    wrap.className = 'sol-modal-backdrop';
+    wrap.id = 'sol-charge-modal';
+    wrap.onclick = e => { if (e.target === wrap && !extra.charge.pending) closeModal(); };
+    wrap.innerHTML = `<div class="sol-modal">
+      <div class="sol-modal-head">
+        <h2>Finalizar y cobrar</h2>
+        <button class="sol-x" onclick="solCloseFeatureModal()" aria-label="Cerrar">×</button>
+      </div>
+
+      <div class="sol-charge-summary">
+        <b>${escapeHtml(job.categoryId && typeof nameFor === 'function' ? nameFor(state.categories || [], job.categoryId) : 'Servicio Soluciona')}</b>
+        <div class="metric">${escapeHtml(job.description || '')}</div>
+        ${address ? `<div class="metric" style="margin-top:7px">📍 ${escapeHtml(address)}</div>` : ''}
+      </div>
+
+      <label class="lbl" for="solChargeAmount">Importe final</label>
+      <div class="sol-money-box">
+        <span class="sol-money-symbol">$</span>
+        <input class="sol-money-input" id="solChargeAmount" type="text" inputmode="decimal"
+          autocomplete="off" placeholder="0,00"
+          oninput="solChargeAmountChanged(this.value)">
+      </div>
+      <div class="metric">Pesos argentinos (ARS)</div>
+
+      <div id="sol-charge-location" class="sol-location-card"></div>
+      <div class="metric" style="margin:-4px 2px 12px">
+        La ubicación se toma al momento del cobro para el punto de servicio. No reemplaza ni modifica tu domicilio habitual.
+      </div>
+
+      <div id="sol-charge-error" class="error"></div>
+      <button id="sol-charge-btn" class="btn primary" disabled onclick="solConfirmCharge()">Generar QR de cobro</button>
+      <div style="height:8px"></div>
+      <button class="btn secondary" onclick="solCloseFeatureModal()">Cancelar</button>
+    </div>`;
+    document.body.appendChild(wrap);
+    updateChargeLocationUi();
+    updateChargeButton();
+    setTimeout(() => {
+      try { F.requestCurrentLocation(); }
+      catch (_) {
+        extra.charge.locating = false;
+        extra.charge.locationError = 'No pudimos iniciar la ubicación del dispositivo.';
+        updateChargeLocationUi();
+      }
+    }, 180);
+  }
+
+  function updateChargeLocationUi() {
+    const el = document.getElementById('sol-charge-location');
+    if (!el) return;
+    if (extra.charge.locating) {
+      el.innerHTML = `<div class="sol-location-head">
+        <div class="sol-location-icon">📍</div>
+        <div class="sol-location-text"><b>Ubicación actual del servicio</b>
+          <div class="metric"><span class="sol-spin"></span>Obteniendo ubicación…</div>
+        </div>
+      </div>`;
+      return;
+    }
+    if (extra.charge.location) {
+      const accuracy = Math.round(Number(extra.charge.location.accuracyMeters || 0));
+      el.innerHTML = `<div class="sol-location-head">
+        <div class="sol-location-icon">✓</div>
+        <div class="sol-location-text"><b class="sol-location-ok">Ubicación lista</b>
+          <div class="metric">${accuracy > 0 ? `Precisión aproximada: ±${accuracy} m` : 'Ubicación actual confirmada'}</div>
+        </div>
+        <button class="sol-mini-btn" onclick="solRetryChargeLocation()">Actualizar</button>
+      </div>`;
+      return;
+    }
+    el.innerHTML = `<div class="sol-location-head">
+      <div class="sol-location-icon">!</div>
+      <div class="sol-location-text"><b class="sol-location-warn">Necesitamos tu ubicación</b>
+        <div class="metric">${escapeHtml(extra.charge.locationError || 'Activá la ubicación para generar el QR.')}</div>
+      </div>
+      <button class="sol-mini-btn" onclick="solRetryChargeLocation()">Reintentar</button>
+    </div>`;
+  }
+
+  window.solRetryChargeLocation = () => {
+    extra.charge.locating = true;
+    extra.charge.locationError = '';
+    updateChargeLocationUi();
+    updateChargeButton();
+    try { F.requestCurrentLocation(); }
+    catch (_) {
+      extra.charge.locating = false;
+      extra.charge.locationError = 'No pudimos iniciar la ubicación.';
+      updateChargeLocationUi();
+      updateChargeButton();
+    }
+  };
+
+  window.solChargeAmountChanged = value => {
+    extra.charge.amount = String(value || '');
+    const err = document.getElementById('sol-charge-error');
+    if (err) err.textContent = '';
+    updateChargeButton();
+  };
+
+  function chargeAmountNumber() {
+    const raw = String(extra.charge.amount || '').replace(/\s/g, '').replace(',', '.');
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function updateChargeButton() {
+    const btn = document.getElementById('sol-charge-btn');
+    if (!btn) return;
+    const ready = chargeAmountNumber() > 0 && !!extra.charge.location && !extra.charge.pending;
+    btn.disabled = !ready;
+    btn.textContent = extra.charge.pending ? 'Generando QR…' : 'Generar QR de cobro';
+  }
+
+  window.solConfirmCharge = () => {
+    const amount = chargeAmountNumber();
+    const loc = extra.charge.location;
+    const err = document.getElementById('sol-charge-error');
+    if (!(amount > 0)) {
+      if (err) err.textContent = 'Ingresá un importe válido.';
+      return;
+    }
+    if (!loc) {
+      if (err) err.textContent = 'Primero necesitamos la ubicación actual del servicio.';
+      return;
+    }
+    extra.charge.pending = true;
+    updateChargeButton();
+    if (err) err.textContent = '';
+    F.createPaymentQrAtLocation(
+      extra.charge.requestId,
+      String(amount),
+      String(loc.latitude),
+      String(loc.longitude)
+    );
   };
 
   function themeButtons() {
@@ -453,7 +659,7 @@
       return;
     }
     body.innerHTML = mp.connected
-      ? `<div class="card"><b>✓ Mercado Pago conectado</b><div class="metric">Cuenta: ${escapeHtml(mp.mpUserId||'')}</div><div class="metric">QR/POS: ${mp.posReady?'Configurado':'Pendiente de configuración'}</div></div>
+      ? `<div class="card"><b>✓ Mercado Pago conectado</b><div class="metric">Cuenta: ${escapeHtml(mp.mpUserId||'')}</div><div class="metric">QR/POS: ${mp.posReady?'Configurado':'Se configurará en el primer cobro con tu ubicación actual'}</div></div>
          <div class="notice">Los cobros QR se crean con el token OAuth del profesional. La comisión de Soluciona se calcula en el servidor, nunca en el APK.</div>`
       : `<div class="card"><b>Conectá tu cuenta</b><p class="sub">Mercado Pago te pedirá autorización. Soluciona nunca recibe tu contraseña.</p><button class="btn primary" onclick="SolucionaFeatures.connectMercadoPago()">Conectar Mercado Pago</button></div>`;
   }
