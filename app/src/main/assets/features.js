@@ -6,13 +6,15 @@
   if (!F || !F.isAvailable || !F.isAvailable()) return;
 
   const extra = {
-    settings: { theme: 'system', biometricAvailable: false, biometricEnabled: false, marketplaceConfigured: false },
+    settings: { theme: 'system', biometricAvailable: false, biometricEnabled: false, marketplaceConfigured: false, cardPaymentsConfigured: false },
     bootstrap: { role: '', primaryZone: '', zones: [] },
     zones: [],
     referrals: null,
     mp: null,
     payment: null,
-    charge: { requestId: '', amount: '', location: null, locating: false, locationError: '', pending: false }
+    charge: { requestId: '', amount: '', note: '', location: null, locating: false, locationError: '', pending: false },
+    paymentRequest: null,
+    paymentView: ''
   };
 
   let zonesLoadInFlight = false;
@@ -139,26 +141,45 @@
       // Firebase Auth finishes restoring the persisted user. Do not expose that
       // transient race as a raw NO_SESSION error.
       if (payload.message === 'NO_SESSION' &&
-          ['bootstrap','referrals','marketplaceStatus','paymentStatus'].includes(event)) {
+          ['bootstrap','referrals','marketplaceStatus','paymentStatus','paymentRequest'].includes(event)) {
         return;
       }
+
       if (event === 'currentLocation') {
         extra.charge.locating = false;
         extra.charge.location = null;
         extra.charge.locationError = payload.message || 'No pudimos obtener tu ubicación actual.';
         updateChargeLocationUi();
         updateChargeButton();
+        const err = document.getElementById('sol-pay-center-error');
+        if (err) err.textContent = extra.charge.locationError;
+        const btn = document.getElementById('sol-show-qr-btn');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Reintentar QR híbrido';
+        }
         return;
       }
+
+      if (['paymentRequestCreated','paymentRequestQr','cardSession'].includes(event)) {
+        extra.charge.pending = false;
+        const err = document.getElementById('sol-charge-error') ||
+                    document.getElementById('sol-pay-center-error');
+        if (err) err.textContent = payload.message || 'No se pudo completar la operación.';
+        updateChargeButton();
+      }
+
       if (event === 'paymentQr') {
         extra.charge.pending = false;
         const err = document.getElementById('sol-charge-error');
         if (err) err.textContent = payload.message || 'No se pudo generar el QR.';
         updateChargeButton();
       }
+
       featureToast(payload.message || 'No se pudo completar la operación.', true);
       return;
     }
+
     if (event === 'settings') {
       extra.settings = {...extra.settings, ...payload};
       applyTheme(extra.settings.theme || 'system');
@@ -182,8 +203,6 @@
       zonesLoadedOnce = true;
       extra.zones = payload.zones || [];
       fillRegistrationZone();
-      // A full render here used to recreate every <input> in professional
-      // registration, immediately dismissing the Android keyboard.
       if (!isProtectedFormScreen() && !isTextEditing()) requestRerender();
       return;
     }
@@ -193,6 +212,7 @@
       extra.settings.biometricAvailable = !!payload.biometricAvailable;
       extra.settings.biometricEnabled = !!payload.biometricEnabled;
       extra.settings.marketplaceConfigured = !!payload.marketplaceConfigured;
+      extra.settings.cardPaymentsConfigured = !!payload.cardPaymentsConfigured;
       applyTheme(extra.settings.theme);
       requestRerender();
       return;
@@ -234,10 +254,59 @@
         longitude: Number(payload.longitude),
         accuracyMeters: Number(payload.accuracyMeters || 0)
       };
+      const paymentCenter = document.getElementById('sol-payment-center');
+      if (paymentCenter && extra.paymentRequest?.id && role() === 'PROFESSIONAL') {
+        F.createPaymentRequestQr(
+          extra.paymentRequest.id,
+          String(extra.charge.location.latitude),
+          String(extra.charge.location.longitude)
+        );
+        return;
+      }
       updateChargeLocationUi();
       updateChargeButton();
       return;
     }
+    if (event === 'paymentRequestCreated') {
+      extra.charge.pending = false;
+      closeModal();
+      featureToast('Cobro enviado al cliente.');
+      try { N.listProfessionalJobs(); } catch (_) {}
+      return;
+    }
+    if (event === 'paymentRequest') {
+      extra.paymentRequest = payload;
+      renderPaymentCenter();
+      return;
+    }
+    if (event === 'paymentRequestQr') {
+      extra.charge.pending = false;
+      extra.paymentRequest = payload;
+      extra.paymentView = 'PROFESSIONAL';
+      renderPaymentCenter();
+      return;
+    }
+    if (event === 'cardSession') {
+      // The native Android checkout is opened by FeaturesBridge.
+      return;
+    }
+    if (event === 'cardCheckoutResult') {
+      const requestId = payload.requestId || extra.paymentRequest?.requestId || '';
+      if (payload.status === 'SUCCESS') {
+        featureToast('Mercado Pago procesó la tarjeta. Confirmando pago…');
+      } else if (payload.status === 'CANCELLED') {
+        featureToast('Pago cancelado.');
+      } else {
+        featureToast(payload.message || 'No se pudo procesar la tarjeta.', true);
+      }
+      if (requestId) {
+        setTimeout(() => F.getPaymentRequestForService(requestId), 700);
+        setTimeout(() => F.getPaymentRequestForService(requestId), 2200);
+      }
+      return;
+    }
+
+    // Legacy 0.8.x payment events
     if (event === 'paymentQr') {
       extra.charge.pending = false;
       extra.payment = payload;
@@ -299,17 +368,29 @@
     requestCard = function(r, pro) {
       if (!oldRequestCard) return '';
       let html = oldRequestCard(r, pro);
+
       if (pro && r.status === 'IN_PROGRESS') {
         html = html.replace(
           /<button class="btn primary" onclick="N\.updateRequestStatus\('[^']+','COMPLETED'\)">Finalizar<\/button>/,
-          `<button class="btn primary" onclick="window.solCobrar('${r.id}')">Finalizar y cobrar con QR</button>`
+          `<button class="btn primary" onclick="window.solCobrar('${r.id}')">Enviar cobro al cliente</button>`
         );
       }
+
       if (r.status === 'AWAITING_PAYMENT') {
-        html = html.replace('</div></div>', `<div class="notice warn">Pago pendiente por Mercado Pago.</div></div></div>`);
+        const action = pro
+          ? `<button class="btn primary" onclick="window.solOpenPaymentCenter('${r.id}','PROFESSIONAL')">Ver cobro / mostrar QR</button>`
+          : `<button class="btn primary" onclick="window.solOpenPaymentCenter('${r.id}','CLIENT')">Pagar ahora</button>`;
+        html = html.replace(
+          '</div></div>',
+          `<div class="notice warn">Pago pendiente dentro de Soluciona.</div>${action}</div></div>`
+        );
       }
+
       if (r.status === 'PAID' || r.status === 'COMPLETED') {
-        html = html.replace('</div></div>', `<div class="notice">✓ Pago confirmado.</div></div></div>`);
+        html = html.replace(
+          '</div></div>',
+          `<div class="notice">✓ Servicio pagado y confirmado.</div></div></div>`
+        );
       }
       return html;
     };
@@ -324,7 +405,7 @@
       openMpModal();
       return;
     }
-    openChargeModal(requestId);
+    openChargeRequestModal(requestId);
   };
 
   function currentJob(requestId) {
@@ -338,13 +419,14 @@
     return {};
   }
 
-  function openChargeModal(requestId) {
+  function openChargeRequestModal(requestId) {
     closeModal();
     extra.charge = {
       requestId,
       amount: '',
+      note: '',
       location: null,
-      locating: true,
+      locating: false,
       locationError: '',
       pending: false
     };
@@ -360,13 +442,13 @@
     wrap.onclick = e => { if (e.target === wrap && !extra.charge.pending) closeModal(); };
     wrap.innerHTML = `<div class="sol-modal">
       <div class="sol-modal-head">
-        <h2>Finalizar y cobrar</h2>
+        <h2>Enviar cobro</h2>
         <button class="sol-x" onclick="solCloseFeatureModal()" aria-label="Cerrar">×</button>
       </div>
 
       <div class="sol-charge-summary">
-        <b>${escapeHtml(job.categoryId && typeof nameFor === 'function' ? nameFor(state.categories || [], job.categoryId) : 'Servicio Soluciona')}</b>
-        <div class="metric">${escapeHtml(job.description || '')}</div>
+        <b>Trabajo terminado</b>
+        <div class="metric">${escapeHtml(job.description || 'Servicio Soluciona')}</div>
         ${address ? `<div class="metric" style="margin-top:7px">📍 ${escapeHtml(address)}</div>` : ''}
       </div>
 
@@ -379,74 +461,24 @@
       </div>
       <div class="metric">Pesos argentinos (ARS)</div>
 
-      <div id="sol-charge-location" class="sol-location-card"></div>
-      <div class="metric" style="margin:-4px 2px 12px">
-        La ubicación se toma al momento del cobro para el punto de servicio. No reemplaza ni modifica tu domicilio habitual.
+      <label class="lbl" for="solChargeNote" style="margin-top:14px">Detalle del trabajo</label>
+      <textarea id="solChargeNote" class="input" rows="3" maxlength="500"
+        placeholder="Ej.: cambio de térmica y revisión de tablero"
+        oninput="extra.charge.note=this.value"></textarea>
+
+      <div class="notice" style="margin-top:12px">
+        El cliente verá el importe en Soluciona y elegirá cómo pagar. El servicio se completa
+        solamente cuando el backend confirma el pago.
       </div>
 
       <div id="sol-charge-error" class="error"></div>
-      <button id="sol-charge-btn" class="btn primary" disabled onclick="solConfirmCharge()">Generar QR de cobro</button>
+      <button id="sol-charge-btn" class="btn primary" disabled onclick="solConfirmChargeRequest()">Enviar cobro al cliente</button>
       <div style="height:8px"></div>
       <button class="btn secondary" onclick="solCloseFeatureModal()">Cancelar</button>
     </div>`;
     document.body.appendChild(wrap);
-    updateChargeLocationUi();
     updateChargeButton();
-    setTimeout(() => {
-      try { F.requestCurrentLocation(); }
-      catch (_) {
-        extra.charge.locating = false;
-        extra.charge.locationError = 'No pudimos iniciar la ubicación del dispositivo.';
-        updateChargeLocationUi();
-      }
-    }, 180);
   }
-
-  function updateChargeLocationUi() {
-    const el = document.getElementById('sol-charge-location');
-    if (!el) return;
-    if (extra.charge.locating) {
-      el.innerHTML = `<div class="sol-location-head">
-        <div class="sol-location-icon">📍</div>
-        <div class="sol-location-text"><b>Ubicación actual del servicio</b>
-          <div class="metric"><span class="sol-spin"></span>Obteniendo ubicación…</div>
-        </div>
-      </div>`;
-      return;
-    }
-    if (extra.charge.location) {
-      const accuracy = Math.round(Number(extra.charge.location.accuracyMeters || 0));
-      el.innerHTML = `<div class="sol-location-head">
-        <div class="sol-location-icon">✓</div>
-        <div class="sol-location-text"><b class="sol-location-ok">Ubicación lista</b>
-          <div class="metric">${accuracy > 0 ? `Precisión aproximada: ±${accuracy} m` : 'Ubicación actual confirmada'}</div>
-        </div>
-        <button class="sol-mini-btn" onclick="solRetryChargeLocation()">Actualizar</button>
-      </div>`;
-      return;
-    }
-    el.innerHTML = `<div class="sol-location-head">
-      <div class="sol-location-icon">!</div>
-      <div class="sol-location-text"><b class="sol-location-warn">Necesitamos tu ubicación</b>
-        <div class="metric">${escapeHtml(extra.charge.locationError || 'Activá la ubicación para generar el QR.')}</div>
-      </div>
-      <button class="sol-mini-btn" onclick="solRetryChargeLocation()">Reintentar</button>
-    </div>`;
-  }
-
-  window.solRetryChargeLocation = () => {
-    extra.charge.locating = true;
-    extra.charge.locationError = '';
-    updateChargeLocationUi();
-    updateChargeButton();
-    try { F.requestCurrentLocation(); }
-    catch (_) {
-      extra.charge.locating = false;
-      extra.charge.locationError = 'No pudimos iniciar la ubicación.';
-      updateChargeLocationUi();
-      updateChargeButton();
-    }
-  };
 
   window.solChargeAmountChanged = value => {
     extra.charge.amount = String(value || '');
@@ -464,33 +496,163 @@
   function updateChargeButton() {
     const btn = document.getElementById('sol-charge-btn');
     if (!btn) return;
-    const ready = chargeAmountNumber() > 0 && !!extra.charge.location && !extra.charge.pending;
+    const ready = chargeAmountNumber() > 0 && !extra.charge.pending;
     btn.disabled = !ready;
-    btn.textContent = extra.charge.pending ? 'Generando QR…' : 'Generar QR de cobro';
+    btn.textContent = extra.charge.pending ? 'Enviando…' : 'Enviar cobro al cliente';
   }
 
-  window.solConfirmCharge = () => {
+  window.solConfirmChargeRequest = () => {
     const amount = chargeAmountNumber();
-    const loc = extra.charge.location;
     const err = document.getElementById('sol-charge-error');
     if (!(amount > 0)) {
       if (err) err.textContent = 'Ingresá un importe válido.';
       return;
     }
-    if (!loc) {
-      if (err) err.textContent = 'Primero necesitamos la ubicación actual del servicio.';
-      return;
-    }
     extra.charge.pending = true;
     updateChargeButton();
     if (err) err.textContent = '';
-    F.createPaymentQrAtLocation(
+    F.createPaymentRequest(
       extra.charge.requestId,
       String(amount),
-      String(loc.latitude),
-      String(loc.longitude)
+      extra.charge.note || ''
     );
   };
+
+  window.solOpenPaymentCenter = (requestId, view='') => {
+    extra.paymentView = view || (role() === 'PROFESSIONAL' ? 'PROFESSIONAL' : 'CLIENT');
+    extra.paymentRequest = null;
+    openPaymentCenterShell();
+    F.getPaymentRequestForService(requestId);
+  };
+
+  function openPaymentCenterShell() {
+    closeModal();
+    const wrap = document.createElement('div');
+    wrap.className = 'sol-modal-backdrop';
+    wrap.id = 'sol-payment-center';
+    wrap.onclick = e => { if (e.target === wrap) closeModal(); };
+    wrap.innerHTML = `<div class="sol-modal">
+      <div class="sol-modal-head">
+        <h2>${extra.paymentView === 'PROFESSIONAL' ? 'Cobro del servicio' : 'Pagar servicio'}</h2>
+        <button class="sol-x" onclick="solCloseFeatureModal()">×</button>
+      </div>
+      <div id="sol-pay-center-body"><div class="loader"></div><div class="sub" style="text-align:center">Cargando cobro…</div></div>
+    </div>`;
+    document.body.appendChild(wrap);
+  }
+
+  function renderPaymentCenter() {
+    let wrap = document.getElementById('sol-payment-center');
+    if (!wrap) {
+      openPaymentCenterShell();
+      wrap = document.getElementById('sol-payment-center');
+    }
+    const body = document.getElementById('sol-pay-center-body');
+    if (!body) return;
+    const p = extra.paymentRequest;
+    if (!p) {
+      body.innerHTML = `<div class="loader"></div><div class="sub" style="text-align:center">Cargando cobro…</div>`;
+      return;
+    }
+
+    if (p.status === 'PAID') {
+      body.innerHTML = `<div class="card" style="text-align:center">
+        <div style="font-size:46px">✓</div>
+        <h2>Pago confirmado</h2>
+        <div class="metric">${escapeHtml(p.amountFormatted || '')}</div>
+      </div>
+      <button class="btn primary" onclick="solCloseFeatureModal()">Listo</button>`;
+      try {
+        if (role() === 'PROFESSIONAL') N.listProfessionalJobs();
+        else N.listClientRequests();
+      } catch (_) {}
+      return;
+    }
+
+    const note = p.note ? `<div class="metric" style="margin-top:7px">${escapeHtml(p.note)}</div>` : '';
+    const attempt = p.attempt || null;
+
+    if ((extra.paymentView === 'PROFESSIONAL' || role() === 'PROFESSIONAL')) {
+      const qr = p.qrSvg
+        ? `<div class="sol-qr">${p.qrSvg}</div>
+           <div class="notice"><b>QR híbrido.</b><br>El cliente puede usar este QR dinámico o el QR estático asociado a tu caja. Ambos corresponden al mismo cobro.</div>`
+        : '';
+      const activeCard = attempt?.method === 'CARD' && attempt?.status === 'CREATED';
+      body.innerHTML = `<div class="card">
+          <div class="row"><div class="grow"><b>Total a cobrar</b>${note}</div><b>${escapeHtml(p.amountFormatted||'—')}</b></div>
+        </div>
+        ${activeCard ? `<div class="notice warn">El cliente está pagando con tarjeta. No generes otro medio hasta que termine.</div>` : ''}
+        ${qr}
+        ${!p.qrSvg && !activeCard ? `<div id="sol-pay-location" class="sol-location-card">
+          <div class="sol-location-head">
+            <div class="sol-location-icon">📍</div>
+            <div class="sol-location-text"><b>QR presencial</b><div class="metric">Usaremos tu ubicación actual para preparar la caja del servicio.</div></div>
+          </div>
+        </div>
+        <button id="sol-show-qr-btn" class="btn secondary" onclick="solPreparePaymentQr()">Mostrar QR híbrido</button>` : ''}
+        <div id="sol-pay-center-error" class="error"></div>`;
+      return;
+    }
+
+    const cardDisabled = !extra.settings.cardPaymentsConfigured;
+    const qrActive = attempt?.method === 'QR' && attempt?.status === 'CREATED';
+    body.innerHTML = `<div class="card">
+        <div class="row"><div class="grow"><b>Total</b>${note}</div><b>${escapeHtml(p.amountFormatted||'—')}</b></div>
+      </div>
+      <div class="card">
+        <b>Elegí cómo pagar</b>
+        <div class="metric" style="margin-bottom:12px">El pago queda asociado a este servicio y Soluciona confirma el resultado automáticamente.</div>
+
+        <button class="btn primary" ${cardDisabled||qrActive?'disabled':''} onclick="solPayByCard()">
+          💳 Crédito / débito
+        </button>
+        <div class="metric" style="margin:7px 2px 13px">
+          ${cardDisabled ? 'Falta configurar la Public Key de Mercado Pago en esta compilación.' : 'Pago seguro dentro de la app con Mercado Pago.'}
+        </div>
+
+        <div class="notice ${qrActive?'':'warn'}">
+          ${qrActive
+            ? 'Hay un QR presencial activo. Pagalo desde otra billetera/dispositivo o pedile al profesional que te lo muestre.'
+            : 'También podés pagar con el QR híbrido que te muestre el profesional.'}
+        </div>
+      </div>
+      <div id="sol-pay-center-error" class="error"></div>`;
+  }
+
+  window.solPayByCard = () => {
+    const p = extra.paymentRequest;
+    if (!p?.id) return;
+    const err = document.getElementById('sol-pay-center-error');
+    if (err) err.textContent = '';
+    F.startCardPayment(p.id);
+  };
+
+  window.solPreparePaymentQr = () => {
+    const p = extra.paymentRequest;
+    if (!p?.id) return;
+    const btn = document.getElementById('sol-show-qr-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Obteniendo ubicación…';
+    }
+    extra.charge.location = null;
+    extra.charge.locationError = '';
+    extra.charge.locating = true;
+    try { F.requestCurrentLocation(); }
+    catch (_) {
+      extra.charge.locating = false;
+      const err = document.getElementById('sol-pay-center-error');
+      if (err) err.textContent = 'No pudimos iniciar la ubicación.';
+    }
+  };
+
+  function updateChargeLocationUi() {
+    const el = document.getElementById('sol-pay-location');
+    if (!el) return;
+    if (extra.charge.locationError) {
+      el.innerHTML = `<div class="sol-location-head"><div class="sol-location-icon">!</div><div class="sol-location-text"><b class="sol-location-warn">Ubicación no disponible</b><div class="metric">${escapeHtml(extra.charge.locationError)}</div></div></div>`;
+    }
+  }
 
   function themeButtons() {
     const t = extra.settings.theme || 'system';
@@ -660,7 +822,7 @@
     }
     body.innerHTML = mp.connected
       ? `<div class="card"><b>✓ Mercado Pago conectado</b><div class="metric">Cuenta: ${escapeHtml(mp.mpUserId||'')}</div><div class="metric">QR/POS: ${mp.posReady?'Configurado':'Se configurará en el primer cobro con tu ubicación actual'}</div></div>
-         <div class="notice">Los cobros QR se crean con el token OAuth del profesional. La comisión de Soluciona se calcula en el servidor, nunca en el APK.</div>`
+         <div class="notice">Los cobros usan QR híbrido: QR estático + QR dinámico sobre una misma order. La comisión de Soluciona se calcula en el servidor, nunca en el APK.</div>`
       : `<div class="card"><b>Conectá tu cuenta</b><p class="sub">Mercado Pago te pedirá autorización. Soluciona nunca recibe tu contraseña.</p><button class="btn primary" onclick="SolucionaFeatures.connectMercadoPago()">Conectar Mercado Pago</button></div>`;
   }
 
@@ -676,7 +838,11 @@
         <div class="row"><div class="grow"><b>Total</b><div class="metric">Comisión Soluciona: ${escapeHtml(p.marketplaceFeeFormatted||'—')}</div></div><b>${escapeHtml(p.amountFormatted||'—')}</b></div>
       </div>
       <div class="sol-qr">${p.qrSvg || ''}</div>
-      <div class="notice">Mostrá este QR al cliente. El servicio se marca como pagado únicamente cuando el webhook firmado de Mercado Pago confirma la order.</div>
+      <div class="notice"><b>QR híbrido de Mercado Pago.</b><br>
+        El cliente puede pagar con este QR dinámico o con el QR estático asociado a la caja del profesional.
+        Ambos corresponden a la misma order y, cuando uno se paga, el otro deja de ser utilizable.
+        Soluciona confirma el pago únicamente mediante el webhook de Mercado Pago.
+      </div>
       <div class="metric">Estado: ${escapeHtml(p.status||'PENDING')}</div>
     </div>`;
     document.body.appendChild(wrap);
