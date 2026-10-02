@@ -21,6 +21,7 @@ type SellerRow = {
   mp_user_id: string;
   access_token_enc: string;
   refresh_token_enc: string | null;
+  public_key: string | null;
   expires_at: number | null;
   store_id: string | null;
   pos_id: string | null;
@@ -171,19 +172,22 @@ async function handleMpCallback(url: URL, env: Env): Promise<Response> {
     const refreshEnc = refreshToken ? await encryptSecret(refreshToken, env) : null;
     const expiresAt = tokenData.expires_in ? Date.now() + Number(tokenData.expires_in) * 1000 : null;
     const mpUserId = String(tokenData.user_id || "");
+    const publicKey = String(tokenData.public_key || "").trim();
 
     if (!mpUserId) throw new Error("Mercado Pago no devolvió user_id.");
+    if (!publicKey) throw new Error("Mercado Pago no devolvió public_key del vendedor.");
 
     await env.DB.prepare(`
-      INSERT INTO sellers(uid,mp_user_id,access_token_enc,refresh_token_enc,expires_at,connected_at,updated_at)
-      VALUES(?,?,?,?,?,?,?)
+      INSERT INTO sellers(uid,mp_user_id,access_token_enc,refresh_token_enc,public_key,expires_at,connected_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?)
       ON CONFLICT(uid) DO UPDATE SET
         mp_user_id=excluded.mp_user_id,
         access_token_enc=excluded.access_token_enc,
         refresh_token_enc=excluded.refresh_token_enc,
+        public_key=excluded.public_key,
         expires_at=excluded.expires_at,
         updated_at=excluded.updated_at
-    `).bind(row.uid, mpUserId, accessEnc, refreshEnc, expiresAt, Date.now(), Date.now()).run();
+    `).bind(row.uid, mpUserId, accessEnc, refreshEnc, publicKey, expiresAt, Date.now(), Date.now()).run();
 
     // Mobile professionals do not have a fixed point of sale. Store/POS setup
     // is intentionally deferred until the first QR, when the app can provide the
@@ -202,6 +206,7 @@ async function marketplaceStatus(identity: Identity, env: Env): Promise<Response
   return json({
     connected: !!seller,
     mpUserId: seller?.mp_user_id || "",
+    publicKeyReady: !!seller?.public_key,
     posReady: !!seller?.external_pos_id,
     setupError: seller?.setup_error || ""
   });
@@ -485,6 +490,11 @@ async function createCardSession(
     const seller = await getSeller(paymentRequest.professional_uid, env);
     if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
     const accessToken = await validSellerAccessToken(seller, env);
+    const refreshedSeller = await getSeller(paymentRequest.professional_uid, env);
+    const sellerPublicKey = String(refreshedSeller?.public_key || "").trim();
+    if (!sellerPublicKey) {
+      throw httpError(409, "MP_PUBLIC_KEY_MISSING", "El profesional debe reconectar Mercado Pago para actualizar su clave pública.");
+    }
     const current = await mpFetch(
       `https://api.mercadopago.com/v1/orders/${encodeURIComponent(existing.mp_order_id)}`,
       accessToken,
@@ -502,6 +512,7 @@ async function createCardSession(
         requestId: paymentRequest.request_id,
         orderId: existing.mp_order_id,
         clientToken,
+        sellerPublicKey,
         amountFormatted: formatArs(paymentRequest.amount_cents)
       });
     }
@@ -510,6 +521,11 @@ async function createCardSession(
   const seller = await getSeller(paymentRequest.professional_uid, env);
   if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "El profesional debe reconectar Mercado Pago.");
   const accessToken = await validSellerAccessToken(seller, env);
+  const refreshedSeller = await getSeller(paymentRequest.professional_uid, env);
+  const sellerPublicKey = String(refreshedSeller?.public_key || "").trim();
+  if (!sellerPublicKey) {
+    throw httpError(409, "MP_PUBLIC_KEY_MISSING", "El profesional debe reconectar Mercado Pago para actualizar su clave pública.");
+  }
   const commissionBps = await commissionForProfessional(paymentRequest.professional_uid, env);
   const feeCents = Math.round(paymentRequest.amount_cents * commissionBps / 10000);
   const amountDecimal = centsToDecimal(paymentRequest.amount_cents);
@@ -558,6 +574,7 @@ async function createCardSession(
     requestId: paymentRequest.request_id,
     orderId,
     clientToken,
+    sellerPublicKey,
     amountFormatted: formatArs(paymentRequest.amount_cents)
   });
 }
@@ -1350,10 +1367,11 @@ async function validSellerAccessToken(seller: SellerRow, env: Env): Promise<stri
   const newRefresh = tokenData.refresh_token ? String(tokenData.refresh_token) : refreshToken;
   const refreshEnc = await encryptSecret(newRefresh, env);
   const expiresAt = tokenData.expires_in ? Date.now() + Number(tokenData.expires_in) * 1000 : null;
+  const publicKey = String(tokenData.public_key || seller.public_key || "").trim();
 
   await env.DB.prepare(
-    "UPDATE sellers SET access_token_enc=?,refresh_token_enc=?,expires_at=?,updated_at=? WHERE uid=?"
-  ).bind(accessEnc, refreshEnc, expiresAt, Date.now(), seller.uid).run();
+    "UPDATE sellers SET access_token_enc=?,refresh_token_enc=?,public_key=?,expires_at=?,updated_at=? WHERE uid=?"
+  ).bind(accessEnc, refreshEnc, publicKey || null, expiresAt, Date.now(), seller.uid).run();
 
   return access;
 }
