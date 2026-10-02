@@ -3,6 +3,7 @@ import org.gradle.api.GradleException
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
+    id("org.jetbrains.kotlin.android")
 }
 
 val releaseRequested = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
@@ -10,6 +11,7 @@ val admobAppId = providers.gradleProperty("ADMOB_APP_ID").orNull
 val admobBannerId = providers.gradleProperty("ADMOB_BANNER_ID").orNull
 val documentsApiUrl = providers.gradleProperty("DOCUMENTS_API_URL").orElse("").get()
 val marketplaceApiUrl = providers.gradleProperty("MARKETPLACE_API_URL").orElse("").get()
+val mpPublicKey = providers.gradleProperty("MP_PUBLIC_KEY").orElse("").get()
 val keystoreFile = providers.gradleProperty("KEYSTORE_FILE").orNull
 val keystorePassword = providers.gradleProperty("KEYSTORE_PASSWORD").orNull
 val keyAliasValue = providers.gradleProperty("KEY_ALIAS").orNull
@@ -37,6 +39,9 @@ if (releaseRequested) {
     if (marketplaceApiUrl.isBlank()) {
         throw GradleException("Para bundleRelease definí MARKETPLACE_API_URL con la URL del Worker Marketplace.")
     }
+    if (mpPublicKey.isBlank()) {
+        throw GradleException("Para bundleRelease definí MP_PUBLIC_KEY con la Public Key de Mercado Pago.")
+    }
 }
 
 android {
@@ -47,12 +52,13 @@ android {
         applicationId = "com.fixhome.soluciona"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.8.8"
+        versionCode = 22
+        versionName = "0.9.0"
         manifestPlaceholders["admobAppId"] = "ca-app-pub-3940256099942544~3347511713"
         buildConfigField("String", "ADMOB_BANNER_ID", "\"ca-app-pub-3940256099942544/9214589741\"")
         buildConfigField("String", "DOCUMENTS_API_URL", "\"${documentsApiUrl.replace("\"", "\\\"")}\"")
         buildConfigField("String", "MARKETPLACE_API_URL", "\"${marketplaceApiUrl.replace("\"", "\\\"")}\"")
+        buildConfigField("String", "MP_PUBLIC_KEY", "\"${mpPublicKey.replace("\"", "\\\"")}\"")
     }
 
     signingConfigs {
@@ -92,6 +98,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {
@@ -102,4 +112,9 @@ dependencies {
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.android.gms:play-services-ads:25.5.0")
     implementation("com.google.android.ump:user-messaging-platform:4.0.0")
+
+    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation(platform("com.mercadopago.android.sdk:sdk-android-bom:1.0.0"))
+    implementation("com.mercadopago.android.sdk:sdk-android")
+    implementation("com.mercadopago.android.sdk:checkout")
 }
