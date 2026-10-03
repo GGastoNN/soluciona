@@ -52,6 +52,18 @@ public final class FirebaseBridge {
     private final FirebaseFirestore db;
     private final AdsManager adsManager;
     private String pendingDocumentType;
+    private com.google.firebase.firestore.ListenerRegistration messagesListener;
+    private int messagesGeneration;
+
+    @JavascriptInterface
+    public void stopMessages() {
+        activity.runOnUiThread(() -> {
+            messagesGeneration++;
+            if (messagesListener != null) messagesListener.remove();
+            messagesListener = null;
+        });
+    }
+
 
     FirebaseBridge(Activity activity, WebView webView, AdsManager adsManager) {
         this.activity = activity;
@@ -683,42 +695,44 @@ public final class FirebaseBridge {
 
     @JavascriptInterface
     public void listMessages(String requestId) {
-        FirebaseUser user = auth.getCurrentUser();
-        if (user == null) {
-            emitMessage("messages", false, "NO_SESSION");
-            return;
-        }
-        db.collection("chats").document(requestId).get()
-                .addOnSuccessListener(activity, chat -> {
-                    List<String> members = listStrings(chat.get("members"));
-                    if (!members.contains(user.getUid())) {
-                        emitMessage("messages", false, "No tenés acceso a este chat.");
-                        return;
-                    }
-                    db.collection("chats").document(requestId).collection("messages").get()
-                            .addOnSuccessListener(activity, snapshot -> {
-                                List<DocumentSnapshot> docs = new ArrayList<>(snapshot.getDocuments());
-                                Collections.sort(docs, Comparator.comparingLong(FirebaseBridge::timestampMillis));
-                                JSONArray arr = new JSONArray();
-                                try {
-                                    for (DocumentSnapshot d : docs) {
-                                        JSONObject o = new JSONObject();
-                                        o.put("senderUid", string(d.getString("senderUid")));
-                                        o.put("text", string(d.getString("text")));
-                                        o.put("createdAt", timestampMillis(d));
-                                        arr.put(o);
-                                    }
-                                    JSONObject p = new JSONObject();
-                                    p.put("requestId", requestId);
-                                    p.put("messages", arr);
-                                    emit("messages", true, p);
-                                } catch (Exception e) {
-                                    emitError("messages", e);
-                                }
-                            })
-                            .addOnFailureListener(activity, e -> emitError("messages", e));
-                })
-                .addOnFailureListener(activity, e -> emitError("messages", e));
+        activity.runOnUiThread(() -> {
+            final int generation = ++messagesGeneration;
+            if (messagesListener != null) messagesListener.remove();
+            messagesListener = null;
+            FirebaseUser user = auth.getCurrentUser();
+            if (user == null) { emitMessage("messages", false, "NO_SESSION"); return; }
+            db.collection("chats").document(requestId).get().addOnSuccessListener(activity, chat -> {
+                if (generation != messagesGeneration) return;
+                if (!listStrings(chat.get("members")).contains(user.getUid())) {
+                    emitMessage("messages", false, "No tenés acceso a este chat."); return;
+                }
+                messagesListener = db.collection("chats").document(requestId).collection("messages")
+                    .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING).limit(50)
+                    .addSnapshotListener((snapshot, error) -> {
+                        if (generation != messagesGeneration) return;
+                        if (error != null) { emitError("messages", error); return; }
+                        if (snapshot == null) return;
+                        try {
+                            JSONArray arr = new JSONArray();
+                            List<DocumentSnapshot> docs = new ArrayList<>(snapshot.getDocuments());
+                            Collections.reverse(docs);
+                            for (DocumentSnapshot d : docs) {
+                                JSONObject o = new JSONObject();
+                                o.put("senderUid", string(d.getString("senderUid")));
+                                o.put("text", string(d.getString("text")));
+                                o.put("createdAt", timestampMillis(d));
+                                arr.put(o);
+                            }
+                            JSONObject payload = new JSONObject();
+                            payload.put("requestId", requestId);
+                            payload.put("messages", arr);
+                            emit("messages", true, payload);
+                        } catch (Exception e) { emitError("messages", e); }
+                    });
+            }).addOnFailureListener(activity, e -> {
+                if (generation == messagesGeneration) emitError("messages", e);
+            });
+        });
     }
 
     @JavascriptInterface

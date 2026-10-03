@@ -28,6 +28,8 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebResourceResponse;
+import androidx.webkit.WebViewAssetLoader;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -142,7 +144,7 @@ public class MainActivity extends FragmentActivity {
         // synchronous bridge call. Native code already knows whether Firebase has
         // a persisted user, so pass that state explicitly to the local page.
         String sessionFlag = expectSession ? "1" : "0";
-        webView.loadUrl("file:///android_asset/index.html?session=" + sessionFlag);
+        webView.loadUrl("https://appassets.androidplatform.net/assets/index.html?session=" + sessionFlag);
     }
 
     private void buildUi(boolean darkMode, int surfaceColor) {
@@ -482,11 +484,11 @@ public class MainActivity extends FragmentActivity {
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(false);
         settings.setDatabaseEnabled(false);
-        settings.setAllowFileAccess(true);
-        settings.setAllowContentAccess(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
         settings.setBuiltInZoomControls(false);
         settings.setDisplayZoomControls(false);
-        settings.setTextZoom(100);
+        settings.setTextZoom(Math.round(getResources().getConfiguration().fontScale * 100));
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             settings.setSafeBrowsingEnabled(true);
@@ -494,12 +496,27 @@ public class MainActivity extends FragmentActivity {
         settings.setAllowFileAccessFromFileURLs(false);
         settings.setAllowUniversalAccessFromFileURLs(false);
 
+        final WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
+                .addPathHandler("/assets/", new WebViewAssetLoader.AssetsPathHandler(this)).build();
         webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                WebResourceResponse response = assetLoader.shouldInterceptRequest(request.getUrl());
+                if (response != null) return response;
+                return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden",
+                        java.util.Collections.emptyMap(), new java.io.ByteArrayInputStream(new byte[0]));
+            }
+
             private boolean openExternal(Uri uri) {
                 if (uri == null) return false;
                 String scheme = uri.getScheme();
                 if (scheme == null) return false;
-                if ("file".equalsIgnoreCase(scheme) || "about".equalsIgnoreCase(scheme)) return false;
+                if ("https".equalsIgnoreCase(scheme)
+                        && "appassets.androidplatform.net".equalsIgnoreCase(uri.getHost())
+                        && "/assets/index.html".equals(uri.getPath()) && uri.getPort() == -1) return false;
+                if (!("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme)
+                        || "tel".equalsIgnoreCase(scheme) || "mailto".equalsIgnoreCase(scheme)
+                        || "soluciona".equalsIgnoreCase(scheme))) return true;
                 if ("soluciona".equalsIgnoreCase(scheme)) {
                     handleAppDeepLink(uri);
                     return true;
@@ -532,7 +549,7 @@ public class MainActivity extends FragmentActivity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                if (url != null && url.startsWith("file:///android_asset/")) {
+                if (url != null && url.startsWith("https://appassets.androidplatform.net/assets/index.html")) {
                     pageReady = true;
                     injectEnhancements();
 
@@ -874,6 +891,7 @@ public class MainActivity extends FragmentActivity {
         }
         if (splashView != null) splashView.animate().cancel();
         if (adsManager != null) adsManager.destroy();
+        if (bridge != null) bridge.stopMessages();
         if (webView != null) {
             webView.removeJavascriptInterface("SolucionaNative");
             webView.removeJavascriptInterface("SolucionaFeatures");
