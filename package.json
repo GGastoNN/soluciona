@@ -5,9 +5,10 @@
   "scripts": {
     "dev:r2": "npm --prefix worker-r2 run dev",
     "deploy:r2": "npm --prefix worker-r2 run deploy",
-    "typecheck:r2": "npm --prefix worker-r2 run typecheck",
     "dev:marketplace": "npm --prefix worker-marketplace run dev",
     "deploy:marketplace": "npm --prefix worker-marketplace run deploy",
-    "typecheck:marketplace": "npm --prefix worker-marketplace run typecheck"
+    "typecheck:marketplace": "npm --prefix worker-marketplace run typecheck",
+    "check:r2": "npm --prefix worker-r2 run check",
+    "test": "node --test tests/*.test.cjs"
   }
 }
