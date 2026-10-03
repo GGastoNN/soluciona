@@ -272,8 +272,7 @@ public final class FirebaseBridge {
     public void signOut() {
         chats.stop();
         history.clear();
-        auth.signOut();
-        emit("signOut", true, new JSONObject());
+        SolucionaMessagingService.logout(activity, () -> { auth.signOut(); emit("signOut", true, new JSONObject()); });
     }
 
     @JavascriptInterface
@@ -456,6 +455,7 @@ public final class FirebaseBridge {
                 request.put("description", data.getString("description").trim());
                 request.put("urgent", data.optBoolean("urgent", false));
                 request.put("status", "REQUESTED");
+                request.put("budgetRequired", true);
                 request.put("createdAt", FieldValue.serverTimestamp());
                 request.put("updatedAt", FieldValue.serverTimestamp());
 
@@ -518,6 +518,9 @@ public final class FirebaseBridge {
         o.put("description", string(d.getString("description")));
         o.put("status", string(d.getString("status")));
         o.put("urgent", Boolean.TRUE.equals(d.getBoolean("urgent")));
+        o.put("budgetRequired", Boolean.TRUE.equals(d.getBoolean("budgetRequired")));
+        o.put("approvedTotalCents", d.getLong("approvedTotalCents") == null ? 0 : d.getLong("approvedTotalCents"));
+        if (d.get("budget") instanceof Map) o.put("budget", new JSONObject((Map<?, ?>) d.get("budget")));
         o.put("createdAt", timestampMillis(d));
         return o;
     }

@@ -58,6 +58,7 @@ public class MainActivity extends FragmentActivity {
     private AdsManager adsManager;
     private FirebaseBridge bridge;
     private FeaturesBridge featuresBridge;
+    private HighPriorityBridge priorityBridge;
     private FrameLayout root;
     private FrameLayout adContainer;
     private View splashView;
@@ -96,6 +97,7 @@ public class MainActivity extends FragmentActivity {
 
             webView.addJavascriptInterface(bridge, "SolucionaNative");
             webView.addJavascriptInterface(featuresBridge, "SolucionaFeatures");
+            webView.addJavascriptInterface(priorityBridge, "SolucionaPriority");
 
             // The WebView must always be bootstrapped from a fresh local page after the
             // biometric gate. Restoring an Android WebView snapshot can restore the HTML
@@ -363,6 +365,7 @@ public class MainActivity extends FragmentActivity {
         try {
             bridge = new FirebaseBridge(this, webView, adsManager);
             featuresBridge = new FeaturesBridge(this, webView);
+            priorityBridge = new HighPriorityBridge(this, webView);
         } catch (Throwable serviceError) {
             startupDiagnostic = diagnosticOf(serviceError);
             Log.e(TAG, "Native bridge initialization failed", serviceError);
@@ -612,6 +615,9 @@ public class MainActivity extends FragmentActivity {
             StringBuilder js = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) js.append(line).append('\n');
+            try (BufferedReader priorityReader = new BufferedReader(new InputStreamReader(getAssets().open("priority.js"), StandardCharsets.UTF_8))) {
+                while ((line = priorityReader.readLine()) != null) js.append(line).append('\n');
+            }
             webView.evaluateJavascript(js.toString(), null);
         } catch (Throwable e) {
             Log.e(TAG, "Could not inject features.js", e);
@@ -631,6 +637,7 @@ public class MainActivity extends FragmentActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         if (intent != null) handleAppDeepLink(intent.getData());
+        if (webView != null) webView.evaluateJavascript("window.solPriorityNotification&&window.solPriorityNotification();", null);
     }
 
     private void hideSplashWhenReady() {
@@ -799,6 +806,7 @@ public class MainActivity extends FragmentActivity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 9131 && priorityBridge != null && grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) priorityBridge.registerNotifications();
         if (requestCode != LOCATION_PERMISSION_REQUEST) return;
 
         boolean granted = false;
@@ -835,6 +843,10 @@ public class MainActivity extends FragmentActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == HighPriorityBridge.PICK_IMAGE) {
+            if (priorityBridge != null) priorityBridge.imageResult(resultCode == RESULT_OK && data != null ? data.getData() : null);
+            return;
+        }
         if (requestCode == CARD_CHECKOUT_REQUEST) {
             if (featuresBridge != null) {
                 featuresBridge.onCardCheckoutResult(resultCode, data);
@@ -893,6 +905,7 @@ public class MainActivity extends FragmentActivity {
 
     @Override
     protected void onDestroy() {
+        if (priorityBridge != null) priorityBridge.close();
         if (splashEntrance != null) {
             splashEntrance.cancel();
             splashEntrance = null;
