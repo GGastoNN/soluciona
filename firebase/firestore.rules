@@ -1,7 +1,13 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() { return request.auth != null; }
+    function accountAllowed() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return !exists(path) || (
+        (!('accountStatus' in get(path).data) || !(get(path).data.accountStatus in ['SUSPENDED','DEACTIVATED']))
+        && (!('tokensValidAfter' in get(path).data) || request.auth.token.auth_time >= get(path).data.tokensValidAfter));
+    }
+    function signedIn() { return request.auth != null && accountAllowed(); }
     function owner(uid) { return signedIn() && request.auth.uid == uid; }
     function emailVerified() { return signedIn() && request.auth.token.email_verified == true; }
     function admin() { return signedIn() && request.auth.token.admin == true; }
@@ -13,6 +19,37 @@ service cloud.firestore {
         && userRole() == 'PROFESSIONAL'
         && get(/databases/$(database)/documents/professionals/$(request.auth.uid)).data.verificationStatus == 'APPROVED';
     }
+
+
+    match /identity_submissions/{uid} {
+      function imageValid(field) {
+        return !(field in request.resource.data) || (
+          request.resource.data[field].keys().hasOnly(['storageKey','contentType','size'])
+          && request.resource.data[field].storageKey is string
+          && request.resource.data[field].storageKey.matches('identities/' + uid + '/[A-Za-z0-9-]+')
+          && request.resource.data[field].contentType in ['image/jpeg','image/png','image/webp']
+          && request.resource.data[field].size is int
+          && request.resource.data[field].size > 0 && request.resource.data[field].size <= 10485760);
+      }
+      function pendingUpload() { return owner(uid) && emailVerified()
+        && request.resource.data.uid == uid && request.resource.data.status == 'PENDING'
+        && request.resource.data.reviewNote == '' && request.resource.data.consentVersion == 'identity-v1'
+        && request.resource.data.updatedAt is timestamp && request.resource.data.consentedAt is timestamp
+        && imageValid('front') && imageValid('back'); }
+      allow read: if owner(uid);
+      allow create: if pendingUpload() && request.resource.data.keys().hasOnly(['uid','front','back','status','reviewNote','consentVersion','consentedAt','updatedAt']);
+      allow update: if pendingUpload() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['front','back','status','reviewNote','consentVersion','consentedAt','updatedAt'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasAny(['front','back']);
+      allow delete: if false;
+    }
+    match /users/{uid}/notification_devices/{deviceId} {
+      allow read, delete: if owner(uid);
+      allow create, update: if owner(uid) && request.resource.data.keys().hasOnly(['token','enabled','platform','updatedAt'])
+        && request.resource.data.token is string && request.resource.data.token.size() > 10 && request.resource.data.token.size() < 4096
+        && request.resource.data.enabled is bool && request.resource.data.platform == 'ANDROID'
+        && request.resource.data.updatedAt is timestamp;
+    }
+    match /notification_receipts/{receiptId} { allow read, write: if false; }
 
     match /zones/{zoneId} {
       allow read: if true;
@@ -85,7 +122,10 @@ service cloud.firestore {
         && userRole() == 'CLIENT'
         && request.resource.data.clientUid == request.auth.uid
         && request.resource.data.professionalUid == null
-        && request.resource.data.status == 'REQUESTED';
+        && request.resource.data.status == 'REQUESTED'
+        && request.resource.data.budgetRequired == true
+        && !('budget' in request.resource.data) && !('approvedTotalCents' in request.resource.data)
+        && !('photoCount' in request.resource.data);
 
       allow read: if signedIn() && (
         resource.data.clientUid == request.auth.uid
@@ -113,11 +153,40 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])
           && (
             (resource.data.status == 'ACCEPTED' && request.resource.data.status == 'ON_THE_WAY')
-            || (resource.data.status == 'ON_THE_WAY' && request.resource.data.status == 'IN_PROGRESS')
+            || (resource.data.status == 'ON_THE_WAY' && request.resource.data.status == 'IN_PROGRESS'
+              && (!('budgetRequired' in resource.data) || resource.data.budgetRequired != true
+                || (resource.data.approvedTotalCents > 0 && resource.data.budget.status == 'APPROVED')))
           ))
         || admin()
       );
+      allow update: if owner(resource.data.clientUid) && resource.data.status == 'REQUESTED'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photoCount'])
+        && request.resource.data.photoCount is int && request.resource.data.photoCount <= 6
+        && request.resource.data.photoCount == (('photoCount' in resource.data) ? resource.data.photoCount + 1 : 1);
       allow delete: if false;
+      match /budgets/{revision} {
+        allow read: if signedIn() && (request.auth.uid == get(/databases/$(database)/documents/service_requests/$(requestId)).data.clientUid
+          || request.auth.uid == get(/databases/$(database)/documents/service_requests/$(requestId)).data.professionalUid);
+        allow write: if false;
+      }
+      match /attachments/{photoId} {
+        function service() { return get(/databases/$(database)/documents/service_requests/$(requestId)).data; }
+        function photoReader() { return signedIn() && (service().clientUid == request.auth.uid || service().professionalUid == request.auth.uid
+          || (approvedProfessional() && service().status == 'REQUESTED'
+            && service().categoryId in get(/databases/$(database)/documents/professionals/$(request.auth.uid)).data.services
+            && service().zoneId in get(/databases/$(database)/documents/professionals/$(request.auth.uid)).data.zones
+            && (service().preferredProfessionalUid == null || service().preferredProfessionalUid == request.auth.uid))); }
+        allow read: if photoReader();
+        allow create: if emailVerified() && service().clientUid == request.auth.uid && service().status == 'REQUESTED'
+          && request.resource.data.keys().hasOnly(['storageKey','contentType','size','ownerUid','createdAt'])
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.storageKey == 'request-photos/' + requestId + '/' + request.auth.uid + '/' + photoId
+          && request.resource.data.contentType in ['image/jpeg','image/png','image/webp']
+          && request.resource.data.size is int && request.resource.data.size > 0 && request.resource.data.size <= 10485760
+          && getAfter(/databases/$(database)/documents/service_requests/$(requestId)).data.photoCount <= 6
+          && getAfter(/databases/$(database)/documents/service_requests/$(requestId)).data.photoCount == (('photoCount' in service()) ? service().photoCount + 1 : 1);
+        allow update, delete: if false;
+      }
     }
 
     match /service_request_private/{requestId} {
