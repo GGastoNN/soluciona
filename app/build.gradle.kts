@@ -54,8 +54,8 @@ android {
         applicationId = "com.fixhome.soluciona"
         minSdk = 26
         targetSdk = 36
-        versionCode = 22
-        versionName = "0.9.0"
+        versionCode = 23
+        versionName = "0.9.2"
         manifestPlaceholders["admobAppId"] = "ca-app-pub-3940256099942544~3347511713"
         buildConfigField("String", "ADMOB_BANNER_ID", "\"ca-app-pub-3940256099942544/9214589741\"")
         buildConfigField("String", "DOCUMENTS_API_URL", "\"${documentsApiUrl.replace("\"", "\\\"")}\"")
@@ -114,6 +114,8 @@ dependencies {
     implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-functions")
+    implementation("com.google.firebase:firebase-messaging")
 
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("com.google.android.gms:play-services-ads:25.5.0")
