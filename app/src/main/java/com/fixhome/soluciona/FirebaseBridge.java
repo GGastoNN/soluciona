@@ -42,7 +42,6 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public final class FirebaseBridge {
     static final int PROFESSIONAL_DOCUMENT_REQUEST = 2002;
@@ -52,18 +51,20 @@ public final class FirebaseBridge {
     private final FirebaseFirestore db;
     private final AdsManager adsManager;
     private String pendingDocumentType;
-    private com.google.firebase.firestore.ListenerRegistration messagesListener;
-    private int messagesGeneration;
+    private final RequestHistoryRepository history;
+    private final ChatRepository chats;
 
     @JavascriptInterface
-    public void stopMessages() {
-        activity.runOnUiThread(() -> {
-            messagesGeneration++;
-            if (messagesListener != null) messagesListener.remove();
-            messagesListener = null;
-        });
-    }
+    public void stopMessages() { chats.stop(); }
 
+    @JavascriptInterface
+    public void loadOlderMessages(String requestId) { chats.older(requestId); }
+
+    @JavascriptInterface
+    public void loadMoreClientRequests() { history.load("clientRequests", "clientUid", true); }
+
+    @JavascriptInterface
+    public void loadMoreProfessionalJobs() { history.load("professionalJobs", "professionalUid", true); }
 
     FirebaseBridge(Activity activity, WebView webView, AdsManager adsManager) {
         this.activity = activity;
@@ -71,6 +72,20 @@ public final class FirebaseBridge {
         this.adsManager = adsManager;
         this.auth = FirebaseAuth.getInstance();
         this.db = FirebaseFirestore.getInstance();
+        this.history = new RequestHistoryRepository(activity, auth, db, new RequestHistoryRepository.Output() {
+            public JSONObject request(DocumentSnapshot doc) throws Exception { return requestJson(doc, false); }
+            public void success(String event, JSONObject payload) { emit(event, true, payload); }
+            public void failure(String event, Exception error) { emitError(event, error); }
+        });
+        this.chats = new ChatRepository(activity, auth, db, new ChatRepository.Output() {
+            public void success(JSONObject payload) { emit("messages", true, payload); }
+            public void failure(String requestId, Exception error) {
+                JSONObject payload = new JSONObject();
+                try { payload.put("requestId", requestId); payload.put("message", recoverableMessage(error)); }
+                catch (JSONException ignored) {}
+                emit("messages", false, payload);
+            }
+        });
     }
 
     @JavascriptInterface
@@ -255,6 +270,8 @@ public final class FirebaseBridge {
 
     @JavascriptInterface
     public void signOut() {
+        chats.stop();
+        history.clear();
         auth.signOut();
         emit("signOut", true, new JSONObject());
     }
@@ -467,92 +484,16 @@ public final class FirebaseBridge {
     }
 
     @JavascriptInterface
-    public void listClientRequests() {
-        FirebaseUser user = auth.getCurrentUser();
-        if (user == null) {
-            emitMessage("clientRequests", false, "NO_SESSION");
-            return;
-        }
-        db.collection("service_requests").whereEqualTo("clientUid", user.getUid()).get()
-                .addOnSuccessListener(activity, snapshot -> emitRequestsWithPrivate("clientRequests", snapshot))
-                .addOnFailureListener(activity, e -> emitError("clientRequests", e));
-    }
+    public void listClientRequests() { history.load("clientRequests", "clientUid", false); }
 
     @JavascriptInterface
-    public void listProfessionalJobs() {
-        FirebaseUser user = auth.getCurrentUser();
-        if (user == null) {
-            emitMessage("professionalJobs", false, "NO_SESSION");
-            return;
-        }
-        db.collection("service_requests").whereEqualTo("professionalUid", user.getUid()).get()
-                .addOnSuccessListener(activity, snapshot -> emitRequestsWithPrivate("professionalJobs", snapshot))
-                .addOnFailureListener(activity, e -> emitError("professionalJobs", e));
-    }
+    public void listProfessionalJobs() { history.load("professionalJobs", "professionalUid", false); }
 
     @JavascriptInterface
-    public void listOpenRequests() {
-        FirebaseUser user = auth.getCurrentUser();
-        if (user == null) {
-            emitMessage("openRequests", false, "NO_SESSION");
-            return;
-        }
-        db.collection("professionals").document(user.getUid()).get()
-                .addOnSuccessListener(activity, pro -> {
-                    if (!pro.exists() || !"APPROVED".equals(pro.getString("verificationStatus"))) {
-                        emit("openRequests", true, objectWithArray("requests", new JSONArray()));
-                        return;
-                    }
-                    Set<String> services = new HashSet<>(listStrings(pro.get("services")));
-                    Set<String> zones = new HashSet<>(listStrings(pro.get("zones")));
-                    db.collection("service_requests").whereEqualTo("status", "REQUESTED").get()
-                            .addOnSuccessListener(activity, snapshot -> {
-                                JSONArray arr = new JSONArray();
-                                try {
-                                    for (QueryDocumentSnapshot d : snapshot) {
-                                        if (!services.contains(d.getString("categoryId"))) continue;
-                                        if (!zones.contains(d.getString("zoneId"))) continue;
-                                        String preferred = d.getString("preferredProfessionalUid");
-                                        if (preferred != null && !preferred.isBlank() && !user.getUid().equals(preferred)) continue;
-                                        arr.put(requestJson(d, false));
-                                    }
-                                    emit("openRequests", true, objectWithArray("requests", arr));
-                                } catch (Exception e) {
-                                    emitError("openRequests", e);
-                                }
-                            })
-                            .addOnFailureListener(activity, e -> emitError("openRequests", e));
-                })
-                .addOnFailureListener(activity, e -> emitError("openRequests", e));
-    }
+    public void listOpenRequests() { history.loadOpen(false); }
 
-    private void emitRequestsWithPrivate(String event, QuerySnapshot snapshot) {
-        List<DocumentSnapshot> docs = new ArrayList<>(snapshot.getDocuments());
-        Collections.sort(docs, (a, b) -> Long.compare(timestampMillis(b), timestampMillis(a)));
-        if (docs.isEmpty()) {
-            emit(event, true, objectWithArray("requests", new JSONArray()));
-            return;
-        }
-        JSONArray arr = new JSONArray();
-        AtomicInteger remaining = new AtomicInteger(docs.size());
-        for (DocumentSnapshot d : docs) {
-            db.collection("service_request_private").document(d.getId()).get()
-                    .addOnCompleteListener(activity, task -> {
-                        try {
-                            JSONObject item = requestJson(d, false);
-                            if (task.isSuccessful() && task.getResult() != null && task.getResult().exists()) {
-                                Object address = task.getResult().get("address");
-                                if (address instanceof Map) item.put("address", new JSONObject((Map<?, ?>) address));
-                            }
-                            synchronized (arr) { arr.put(item); }
-                        } catch (Exception ignored) {
-                        }
-                        if (remaining.decrementAndGet() == 0) {
-                            emit(event, true, objectWithArray("requests", arr));
-                        }
-                    });
-        }
-    }
+    @JavascriptInterface
+    public void loadMoreOpenRequests() { history.loadOpen(true); }
 
     private void emitRequests(String event, QuerySnapshot snapshot, boolean includeAddress) {
         try {
@@ -694,64 +635,25 @@ public final class FirebaseBridge {
     }
 
     @JavascriptInterface
-    public void listMessages(String requestId) {
-        activity.runOnUiThread(() -> {
-            final int generation = ++messagesGeneration;
-            if (messagesListener != null) messagesListener.remove();
-            messagesListener = null;
-            FirebaseUser user = auth.getCurrentUser();
-            if (user == null) { emitMessage("messages", false, "NO_SESSION"); return; }
-            db.collection("chats").document(requestId).get().addOnSuccessListener(activity, chat -> {
-                if (generation != messagesGeneration) return;
-                if (!listStrings(chat.get("members")).contains(user.getUid())) {
-                    emitMessage("messages", false, "No tenés acceso a este chat."); return;
-                }
-                messagesListener = db.collection("chats").document(requestId).collection("messages")
-                    .orderBy("createdAt", com.google.firebase.firestore.Query.Direction.DESCENDING).limit(50)
-                    .addSnapshotListener((snapshot, error) -> {
-                        if (generation != messagesGeneration) return;
-                        if (error != null) { emitError("messages", error); return; }
-                        if (snapshot == null) return;
-                        try {
-                            JSONArray arr = new JSONArray();
-                            List<DocumentSnapshot> docs = new ArrayList<>(snapshot.getDocuments());
-                            Collections.reverse(docs);
-                            for (DocumentSnapshot d : docs) {
-                                JSONObject o = new JSONObject();
-                                o.put("senderUid", string(d.getString("senderUid")));
-                                o.put("text", string(d.getString("text")));
-                                o.put("createdAt", timestampMillis(d));
-                                arr.put(o);
-                            }
-                            JSONObject payload = new JSONObject();
-                            payload.put("requestId", requestId);
-                            payload.put("messages", arr);
-                            emit("messages", true, payload);
-                        } catch (Exception e) { emitError("messages", e); }
-                    });
-            }).addOnFailureListener(activity, e -> {
-                if (generation == messagesGeneration) emitError("messages", e);
-            });
-        });
-    }
+    public void listMessages(String requestId) { chats.listen(requestId); }
 
     @JavascriptInterface
     public void sendMessage(String requestId, String text) {
         FirebaseUser user = auth.getCurrentUser();
         if (user == null) {
-            emitMessage("messageSent", false, "NO_SESSION");
+            emitSendResult(requestId, "", false, "NO_SESSION");
             return;
         }
         String clean = text == null ? "" : text.trim();
         if (clean.isEmpty() || clean.length() > 1000) {
-            emitMessage("messageSent", false, "El mensaje debe tener entre 1 y 1000 caracteres.");
+            emitSendResult(requestId, user.getUid(), false, "El mensaje debe tener entre 1 y 1000 caracteres.");
             return;
         }
         DocumentReference chatRef = db.collection("chats").document(requestId);
-        chatRef.get().addOnSuccessListener(activity, chat -> {
+        chatRef.get().addOnSuccessListener( chat -> {
             List<String> members = listStrings(chat.get("members"));
             if (!members.contains(user.getUid())) {
-                emitMessage("messageSent", false, "No tenés acceso a este chat.");
+                emitSendResult(requestId, user.getUid(), false, "No tenés acceso a este chat.");
                 return;
             }
             Map<String, Object> message = new HashMap<>();
@@ -759,15 +661,23 @@ public final class FirebaseBridge {
             message.put("text", clean);
             message.put("createdAt", FieldValue.serverTimestamp());
             chatRef.collection("messages").add(message)
-                    .addOnSuccessListener(activity, ref -> {
+                    .addOnSuccessListener( ref -> {
                         Map<String, Object> update = new HashMap<>();
                         update.put("lastMessage", clean);
                         update.put("updatedAt", FieldValue.serverTimestamp());
                         chatRef.set(update, SetOptions.merge());
-                        emitMessage("messageSent", true, "Mensaje enviado.");
+                        emitSendResult(requestId, user.getUid(), true, "Mensaje enviado.");
                     })
-                    .addOnFailureListener(activity, e -> emitError("messageSent", e));
-        }).addOnFailureListener(activity, e -> emitError("messageSent", e));
+                    .addOnFailureListener( e -> emitSendResult(requestId, user.getUid(), false, recoverableMessage(e)));
+        }).addOnFailureListener( e -> emitSendResult(requestId, user.getUid(), false, recoverableMessage(e)));
+    }
+
+    private void emitSendResult(String requestId, String uid, boolean ok, String message) {
+        JSONObject payload = new JSONObject();
+        try {
+            payload.put("requestId", requestId); payload.put("ownerUid", uid); payload.put("message", message);
+        } catch (JSONException ignored) {}
+        emit("messageSent", ok, payload);
     }
 
     @JavascriptInterface
@@ -1008,7 +918,26 @@ public final class FirebaseBridge {
         emit(event, ok, payload);
     }
 
+    private static String recoverableMessage(Exception error) {
+        if (error instanceof com.google.firebase.firestore.FirebaseFirestoreException) {
+            com.google.firebase.firestore.FirebaseFirestoreException.Code code =
+                    ((com.google.firebase.firestore.FirebaseFirestoreException) error).getCode();
+            switch (code) {
+                case UNAVAILABLE: case DEADLINE_EXCEEDED:
+                    return "No pudimos conectar. Revisá tu conexión y reintentá.";
+                case PERMISSION_DENIED: return "No tenés permiso para consultar estos datos.";
+                case FAILED_PRECONDITION: return "Esta consulta requiere configuración del servidor. Contactá a soporte.";
+                default: return "No pudimos sincronizar los datos. Reintentá en unos instantes.";
+            }
+        }
+        if (error instanceof IllegalStateException && "NO_SESSION".equals(error.getMessage())) return "NO_SESSION";
+        return "No pudimos cargar los datos. Reintentá en unos instantes.";
+    }
+
     private void emitError(String event, Exception exception) {
+        if (exception instanceof com.google.firebase.firestore.FirebaseFirestoreException) {
+            emitMessage(event, false, recoverableMessage(exception)); return;
+        }
         String message = exception.getMessage() == null ? "Error inesperado." : exception.getMessage();
         if (exception instanceof FirebaseAuthException) {
             message = ((FirebaseAuthException) exception).getErrorCode() + ": " + message;
@@ -1017,7 +946,9 @@ public final class FirebaseBridge {
     }
 
     private void emit(String event, boolean ok, JSONObject payload) {
+        if (!ok) RuntimeDiagnostics.failure(event);
         activity.runOnUiThread(() -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
             String js = "window.solucionaNativeEvent && window.solucionaNativeEvent(" +
                     JSONObject.quote(event) + "," + ok + "," + payload.toString() + ");";
             webView.evaluateJavascript(js, null);

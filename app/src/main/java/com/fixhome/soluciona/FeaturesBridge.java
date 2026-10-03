@@ -788,7 +788,9 @@ public final class FeaturesBridge {
     }
 
     private void emit(String event, boolean ok, JSONObject payload) {
+        if (!ok) RuntimeDiagnostics.failure(event);
         activity.runOnUiThread(() -> {
+            if (activity.isFinishing() || activity.isDestroyed()) return;
             String js = "window.solucionaFeaturesEvent && window.solucionaFeaturesEvent("
                     + JSONObject.quote(event) + "," + ok + "," + payload.toString() + ");";
             webView.evaluateJavascript(js, null);

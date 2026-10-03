@@ -64,6 +64,7 @@ public class MainActivity extends FragmentActivity {
     private AnimatorSet splashEntrance;
     private boolean splashExitScheduled;
     private long splashStartedAt;
+    private long appStartedAt;
     private boolean pageReady;
     private boolean enhancementsInjected;
     private boolean expectSessionForPage;
@@ -75,6 +76,7 @@ public class MainActivity extends FragmentActivity {
         super.onCreate(savedInstanceState);
 
         splashStartedAt = SystemClock.uptimeMillis();
+        appStartedAt = splashStartedAt;
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
         try {
@@ -550,6 +552,7 @@ public class MainActivity extends FragmentActivity {
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 if (url != null && url.startsWith("https://appassets.androidplatform.net/assets/index.html")) {
+                    if (!pageReady) RuntimeDiagnostics.startup(SystemClock.uptimeMillis() - appStartedAt);
                     pageReady = true;
                     injectEnhancements();
 
@@ -871,6 +874,7 @@ public class MainActivity extends FragmentActivity {
 
     @Override
     protected void onPause() {
+        if (bridge != null) bridge.stopMessages();
         if (adsManager != null) adsManager.pause();
         if (webView != null) webView.onPause();
         super.onPause();
@@ -879,7 +883,11 @@ public class MainActivity extends FragmentActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        if (webView != null) webView.onResume();
+        if (webView != null) {
+            webView.onResume();
+            if (pageReady) webView.evaluateJavascript(
+                "window.solucionaResumeChat && window.solucionaResumeChat();", null);
+        }
         if (adsManager != null) adsManager.resume();
     }
 
