@@ -434,3 +434,11 @@ select:focus-visible,
   .bubble{background:#172133}
   .chatbar{background:linear-gradient(180deg,rgba(16,23,38,.1),var(--bg) 28%)}
 }
+
+/* Accessibility baseline: readable labels and visible keyboard focus. */
+.lbl, .metric { font-size: 14px; }
+.iconbtn, .link, .chip, .nav button { min-height: 44px; }
+:focus-visible { outline: 3px solid var(--blue, #2563eb); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
