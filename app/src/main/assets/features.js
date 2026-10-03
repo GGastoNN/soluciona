@@ -525,6 +525,11 @@
       <button class="btn secondary" onclick="solCloseFeatureModal()">Cancelar</button>
     </div>`;
     document.body.appendChild(wrap);
+    if (job.budgetRequired && job.approvedTotalCents > 0) {
+      extra.charge.amount = (job.approvedTotalCents / 100).toFixed(2);
+      const field = document.getElementById("solChargeAmount");
+      if (field) { field.value = extra.charge.amount; field.readOnly = true; }
+    }
     updateChargeButton();
   }
 
