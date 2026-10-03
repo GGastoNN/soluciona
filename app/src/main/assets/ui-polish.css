@@ -442,3 +442,15 @@ select:focus-visible,
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+html[data-sol-theme] label.lbl { color: var(--muted); }
+html[data-sol-theme] .input,
+html[data-sol-theme] textarea,
+html[data-sol-theme] select,
+html[data-sol-theme] .secondary { background: var(--card); color: var(--text); border-color: var(--line); }
+html[data-sol-theme] .input:focus,
+html[data-sol-theme] textarea:focus,
+html[data-sol-theme] select:focus { background: var(--card); border-color: var(--blue); }
+html[data-sol-theme] .notice { background: var(--soft); color: var(--text); border-color: var(--line); }
+html[data-sol-theme] .chatbar { background: var(--bg); }
+button:disabled { opacity: .65; cursor: wait; }
