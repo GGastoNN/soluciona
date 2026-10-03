@@ -439,6 +439,12 @@ type PaymentAttemptRow = {
   updated_at: number;
 };
 
+function requireApprovedBudget(service: any, amount: number) {
+  if(service.budgetRequired === true && (!(Number(service.approvedTotalCents) > 0) || service.budget?.status === "PENDING" || Number(service.approvedTotalCents) !== amount)) {
+    throw httpError(409, "BUDGET_APPROVAL_REQUIRED", "El cobro debe coincidir con el total aprobado por el cliente y no puede haber adicionales pendientes.");
+  }
+}
+
 async function createPlatformPaymentRequest(
   identity: Identity,
   request: Request,
@@ -459,6 +465,7 @@ async function createPlatformPaymentRequest(
 
   const service = await firestoreGet(`service_requests/${requestId}`, env);
   if (!service) throw httpError(404, "REQUEST_NOT_FOUND", "No encontramos el servicio.");
+  requireApprovedBudget(service, amount);
   if (String(service.professionalUid || "") !== identity.uid) {
     throw httpError(403, "NOT_ASSIGNED", "No estás asignado a este servicio.");
   }
@@ -559,6 +566,9 @@ async function createCardSession(
   if (!paymentRequest) {
     throw httpError(404, "PAYMENT_REQUEST_NOT_FOUND", "No encontramos el cobro.");
   }
+  const budgetService = await firestoreGet(`service_requests/${paymentRequest.request_id}`, env);
+  if (!budgetService) throw httpError(404, "REQUEST_NOT_FOUND", "No encontramos el servicio.");
+  requireApprovedBudget(budgetService, Number(paymentRequest.amount_cents));
   if (identity.uid !== paymentRequest.client_uid) {
     throw httpError(403, "CLIENT_ONLY", "Solo el cliente del servicio puede pagar con tarjeta.");
   }
@@ -612,6 +622,9 @@ async function processCardPayment(
   if (!paymentRequest) {
     throw httpError(404, "PAYMENT_REQUEST_NOT_FOUND", "No encontramos el cobro.");
   }
+  const budgetService = await firestoreGet(`service_requests/${paymentRequest.request_id}`, env);
+  if (!budgetService) throw httpError(404, "REQUEST_NOT_FOUND", "No encontramos el servicio.");
+  requireApprovedBudget(budgetService, Number(paymentRequest.amount_cents));
   if (identity.uid !== paymentRequest.client_uid) {
     throw httpError(403, "CLIENT_ONLY", "Solo el cliente del servicio puede pagar con tarjeta.");
   }
@@ -750,6 +763,7 @@ async function createPaymentRequestQr(
 
   const service = await firestoreGet(`service_requests/${paymentRequest.request_id}`, env);
   if (!service) throw httpError(404, "REQUEST_NOT_FOUND", "No encontramos el servicio.");
+  requireApprovedBudget(service, Number(paymentRequest.amount_cents));
   const privateService = await firestoreGet(`service_request_private/${paymentRequest.request_id}`, env);
   const serviceAddress: any = privateService?.address || {};
 
@@ -1073,6 +1087,8 @@ async function createPaymentQr(identity: Identity, request: Request, env: Env): 
   if (String(service.status || "") !== "IN_PROGRESS") {
     throw httpError(409, "INVALID_STATUS", "El servicio debe estar en curso antes de generar el cobro.");
   }
+
+  requireApprovedBudget(service, amount);
 
   const seller = await getSeller(identity.uid, env);
   if (!seller) throw httpError(409, "MP_NOT_CONNECTED", "Conectá Mercado Pago antes de cobrar.");
