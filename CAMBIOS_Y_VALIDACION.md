@@ -1,0 +1,9 @@
+# Primera entrega de mejoras
+
+Implementado: WebViewAssetLoader con origen HTTPS local, acceso file/content deshabilitado, subrecursos ajenos bloqueados y esquemas externos limitados. Tamaño de texto según el sistema. Reconciliación del DOM dentro de la misma pantalla para conservar nodos de campos, foco, selección y desplazamiento. Labels asociados cuando existe campo contiguo. Chat con listener de los últimos 50 mensajes, orden desde Firestore, filtro de eventos atrasados y liberación al navegar o destruir Activity. Scripts raíz inequívocos para cada Worker y README corregido.
+
+Validación realizada: sintaxis de JavaScript embebido y features.js con Node; integridad del ZIP. No se compiló Android ni se ejecutó Firebase: el entorno no tiene SDK/Gradle ni dependencias instaladas. Los cambios requieren validación en dispositivo antes de publicación.
+
+Pruebas manuales necesarias: escribir mientras llegan mensajes, cambiar de chat rápidamente, salir y volver, cerrar sesión, probar teclado/rotación/texto ampliado; confirmar assets y splash sin red; enlaces tel/mailto/OAuth externos; rechazo de file/content/iframe externos; registro profesional y selección de categorías durante actualizaciones; comparar Firestore antes/después. La consulta por createdAt requiere ese campo en cada mensaje.
+
+Pendiente: paginación con cursor de pedidos y mensajes antiguos (por ahora el chat muestra solamente los últimos 50), separación completa de bridges y Activity, optimización de datos privados, Wrapper y locks generados con acceso a repositorios, pruebas automatizadas Android/Firebase, métricas sin datos sensibles, revisión exhaustiva de interpolaciones HTML/onclick, checkout oscuro, iconos vectoriales, rediseño de pantallas y notificaciones push. Push necesita configuración FCM y un emisor backend; no se activó sin infraestructura.

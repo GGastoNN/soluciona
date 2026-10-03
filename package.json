@@ -1,23 +1,13 @@
 {
-  "name": "soluciona-marketplace-api",
-  "version": "0.8.1",
+  "name": "soluciona",
+  "version": "0.9.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "db:local": "wrangler d1 execute soluciona-marketplace --local --file=schema.sql",
-    "db:remote": "wrangler d1 execute soluciona-marketplace --remote --file=schema.sql",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "jose": "^5.9.6",
-    "qrcode": "^1.5.4"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260901.0",
-    "@types/qrcode": "^1.5.5",
-    "typescript": "^5.9.2",
-    "wrangler": "^4.0.0"
+    "dev:r2": "npm --prefix worker-r2 run dev",
+    "deploy:r2": "npm --prefix worker-r2 run deploy",
+    "typecheck:r2": "npm --prefix worker-r2 run typecheck",
+    "dev:marketplace": "npm --prefix worker-marketplace run dev",
+    "deploy:marketplace": "npm --prefix worker-marketplace run deploy",
+    "typecheck:marketplace": "npm --prefix worker-marketplace run typecheck"
   }
 }
