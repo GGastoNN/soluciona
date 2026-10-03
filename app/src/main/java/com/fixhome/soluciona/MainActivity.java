@@ -10,6 +10,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -46,7 +48,8 @@ public class MainActivity extends FragmentActivity {
     private static final int FILE_CHOOSER_REQUEST = 1001;
     private static final int LOCATION_PERMISSION_REQUEST = 1002;
     private static final int CARD_CHECKOUT_REQUEST = 1003;
-    private static final long MIN_SPLASH_MS = 950L;
+    private static final long MIN_SPLASH_MS = 1250L;
+    private static final int SPLASH_BLUE = Color.rgb(18, 53, 112);
 
     private WebView webView;
     private ValueCallback<Uri[]> filePathCallback;
@@ -181,17 +184,23 @@ public class MainActivity extends FragmentActivity {
         ));
 
         setContentView(root);
-        configureSystemBars(darkMode, surfaceColor);
+        root.setBackgroundColor(SPLASH_BLUE);
+        configureSystemBars(true, SPLASH_BLUE);
         applySystemBarInsets(root);
         registerSystemBackHandler();
     }
 
     private View createSplashView(boolean darkMode) {
+        FrameLayout scene = new FrameLayout(this);
+        scene.setBackgroundColor(SPLASH_BLUE);
+        scene.setClickable(true);
+        scene.addView(new SplashParticlesView(), new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         LinearLayout splash = new LinearLayout(this);
         splash.setOrientation(LinearLayout.VERTICAL);
         splash.setGravity(Gravity.CENTER);
         splash.setPadding(dp(28), dp(28), dp(28), dp(28));
-        splash.setBackgroundColor(darkMode ? Color.rgb(15, 23, 42) : Color.WHITE);
+        splash.setBackgroundColor(Color.TRANSPARENT);
         splash.setClickable(true);
 
         ImageView logo = new ImageView(this);
@@ -203,7 +212,7 @@ public class MainActivity extends FragmentActivity {
 
         TextView name = new TextView(this);
         name.setText("Soluciona.");
-        name.setTextColor(darkMode ? Color.WHITE : Color.rgb(20, 33, 61));
+        name.setTextColor(Color.WHITE);
         name.setTextSize(30);
         name.setGravity(Gravity.CENTER);
         name.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD);
@@ -211,7 +220,7 @@ public class MainActivity extends FragmentActivity {
 
         TextView slogan = new TextView(this);
         slogan.setText("Encontrá. Resolvé. Listo.");
-        slogan.setTextColor(darkMode ? Color.rgb(148, 163, 184) : Color.rgb(100, 116, 139));
+        slogan.setTextColor(Color.rgb(191, 219, 254));
         slogan.setTextSize(15);
         slogan.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams sloganLp = new LinearLayout.LayoutParams(
@@ -221,6 +230,8 @@ public class MainActivity extends FragmentActivity {
         sloganLp.topMargin = dp(7);
         splash.addView(slogan, sloganLp);
 
+        scene.addView(splash, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         // Run after attachment so the first visible frame starts the entrance.
         boolean animate = ValueAnimator.areAnimatorsEnabled();
         if (animate) {
@@ -233,7 +244,7 @@ public class MainActivity extends FragmentActivity {
             slogan.setTranslationY(dp(10));
         }
         splash.post(() -> {
-            if (isFinishing() || isDestroyed() || splashView != splash) return;
+            if (isFinishing() || isDestroyed() || splashView != scene) return;
             splashStartedAt = SystemClock.uptimeMillis();
             if (!animate) return;
 
@@ -265,7 +276,57 @@ public class MainActivity extends FragmentActivity {
             splashEntrance.playTogether(logoEntrance, nameEntrance, sloganEntrance);
             splashEntrance.start();
         });
-        return splash;
+        return scene;
+    }
+
+    /** A fixed, small particle field: no bitmaps, libraries or per-frame allocations. */
+    private final class SplashParticlesView extends View {
+        private static final int COUNT = 26;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float[] x = new float[COUNT];
+        private final float[] y = new float[COUNT];
+        private final float[] radius = new float[COUNT];
+        private final float[] speed = new float[COUNT];
+        private final long startedAt = SystemClock.uptimeMillis();
+        private final boolean motionEnabled = ValueAnimator.areAnimatorsEnabled();
+
+        SplashParticlesView() {
+            super(MainActivity.this);
+            setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            java.util.Random random = new java.util.Random(42L);
+            for (int i = 0; i < COUNT; i++) {
+                x[i] = random.nextFloat();
+                y[i] = random.nextFloat();
+                radius[i] = dp(1) * (1f + random.nextFloat() * 1.6f);
+                speed[i] = 0.012f + random.nextFloat() * 0.018f;
+            }
+            paint.setColor(Color.rgb(147, 197, 253));
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float seconds = motionEnabled
+                    ? (SystemClock.uptimeMillis() - startedAt) / 1000f : 0f;
+            for (int i = 0; i < COUNT; i++) {
+                float progress = y[i] - seconds * speed[i];
+                progress -= (float) Math.floor(progress);
+                float drift = (float) Math.sin(seconds * 0.55f + i) * dp(9);
+                float twinkle = 0.5f + 0.5f * (float) Math.sin(seconds * 1.4f + i);
+                paint.setAlpha((int) (35 + twinkle * 65));
+                canvas.drawCircle(x[i] * getWidth() + drift,
+                        progress * (getHeight() + dp(16)) - dp(8), radius[i], paint);
+            }
+            // Cap at roughly 30 fps; pause while hidden and stop on removal.
+            if (motionEnabled && isAttachedToWindow() && isShown()
+                    && getWindowVisibility() == View.VISIBLE) postInvalidateDelayed(33L);
+        }
+
+        @Override
+        protected void onWindowVisibilityChanged(int visibility) {
+            super.onWindowVisibilityChanged(visibility);
+            if (visibility == View.VISIBLE) invalidate();
+        }
     }
 
     private void initializeServicesSafely() {
@@ -330,7 +391,12 @@ public class MainActivity extends FragmentActivity {
             if (root != null) root.setBackgroundColor(surface);
             if (webView != null) webView.setBackgroundColor(surface);
             if (adContainer != null) adContainer.setBackgroundColor(dark ? Color.rgb(23, 32, 51) : Color.WHITE);
-            configureSystemBars(dark, surface);
+            if (!pageReady && splashView != null) {
+                if (root != null) root.setBackgroundColor(SPLASH_BLUE);
+                configureSystemBars(true, SPLASH_BLUE);
+            } else {
+                configureSystemBars(dark, surface);
+            }
         });
     }
 
@@ -564,6 +630,9 @@ public class MainActivity extends FragmentActivity {
                     .withEndAction(() -> {
                         if (root != null) root.removeView(exitingSplash);
                         if (splashView == exitingSplash) splashView = null;
+                        boolean dark = resolveDarkMode();
+                        if (root != null) root.setBackgroundColor(surfaceColor(dark));
+                        configureSystemBars(dark, surfaceColor(dark));
                         if (splashEntrance != null) {
                             splashEntrance.cancel();
                             splashEntrance = null;
