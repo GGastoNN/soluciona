@@ -1,0 +1,16 @@
+const {test}=require('node:test'),assert=require('node:assert/strict');
+const {money,proposal,decision}=require('../budget.cjs');
+const base=()=>({clientUid:'c',professionalUid:'p',status:'ACCEPTED'});
+const input=()=>({visit:'100,50',labor:'200',materials:'0',note:'Visita y reparación sin materiales.'});
+test('money uses integer cents with comma and avoids float rounding',()=>{assert.equal(money('100,50'),10050);assert.equal(money('0.29'),29);});
+test('invalid and excessive amounts are rejected',()=>{for(const value of ['-1','1.001','Infinity','1e3','','1000001'])assert.throws(()=>money(value));});
+test('only assigned professional may offer',()=>assert.throws(()=>proposal(base(),'other',input())));
+test('financial and cancelled states cannot receive budgets',()=>{for(const status of ['REQUESTED','AWAITING_PAYMENT','COMPLETED','CANCELLED','PAID'])assert.throws(()=>proposal({...base(),status},'p',input()));});
+test('base budget adds visit, labor and materials',()=>{const b=proposal(base(),'p',input());assert.equal(b.totalCents,30050);assert.equal(b.status,'PENDING');assert.equal(b.revision,1);});
+test('pending budgets cannot be silently replaced',()=>assert.throws(()=>proposal({...base(),budget:{status:'PENDING',revision:1}},'p',input())));
+test('zero budgets and missing scope are rejected',()=>{assert.throws(()=>proposal(base(),'p',{...input(),visit:'0',labor:'0'}));assert.throws(()=>proposal(base(),'p',{...input(),note:''}));});
+test('only client can approve',()=>{const req={...base(),budget:proposal(base(),'p',input())};assert.throws(()=>decision(req,'p',{revision:1,accept:true}));});
+test('client accepts an exact revision',()=>{const req={...base(),budget:proposal(base(),'p',input())};assert.deepEqual(decision(req,'c',{revision:1,accept:true}),{status:'APPROVED',approvedTotalCents:30050});});
+test('old revision, duplicate acceptance and string flags rejected',()=>{const req={...base(),budget:proposal(base(),'p',input())};assert.throws(()=>decision(req,'c',{revision:0,accept:true}));assert.throws(()=>decision({...req,budget:{...req.budget,status:'APPROVED'}},'c',{revision:1,accept:true}));assert.throws(()=>decision(req,'c',{revision:1,accept:'true'}));});
+test('additions preserve approved amount until accepted',()=>{const req={...base(),status:'IN_PROGRESS',approvedTotalCents:30050,budget:{revision:1,status:'APPROVED'}};const b=proposal(req,'p',{...input(),visit:'0',labor:'50'});assert.equal(b.amountCents,5000);assert.equal(b.totalCents,35050);assert.equal(b.revision,2);assert.equal(b.additional,true);assert.equal(decision({...req,budget:b},'c',{revision:2,accept:false}).approvedTotalCents,30050);assert.equal(decision({...req,budget:b},'c',{revision:2,accept:true}).approvedTotalCents,35050);});
+test('client cannot approve after payment workflow starts',()=>{const req={...base(),budget:proposal(base(),'p',input()),status:'AWAITING_PAYMENT'};assert.throws(()=>decision(req,'c',{revision:1,accept:true}));});
