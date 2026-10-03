@@ -1,6 +1,11 @@
 package com.fixhome.soluciona;
 
 import android.Manifest;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -51,6 +56,8 @@ public class MainActivity extends FragmentActivity {
     private FrameLayout root;
     private FrameLayout adContainer;
     private View splashView;
+    private AnimatorSet splashEntrance;
+    private boolean splashExitScheduled;
     private long splashStartedAt;
     private boolean pageReady;
     private boolean enhancementsInjected;
@@ -214,6 +221,50 @@ public class MainActivity extends FragmentActivity {
         sloganLp.topMargin = dp(7);
         splash.addView(slogan, sloganLp);
 
+        // Run after attachment so the first visible frame starts the entrance.
+        boolean animate = ValueAnimator.areAnimatorsEnabled();
+        if (animate) {
+            logo.setAlpha(0f);
+            logo.setScaleX(0.78f);
+            logo.setScaleY(0.78f);
+            name.setAlpha(0f);
+            name.setTranslationY(dp(14));
+            slogan.setAlpha(0f);
+            slogan.setTranslationY(dp(10));
+        }
+        splash.post(() -> {
+            if (isFinishing() || isDestroyed() || splashView != splash) return;
+            splashStartedAt = SystemClock.uptimeMillis();
+            if (!animate) return;
+
+            AnimatorSet logoEntrance = new AnimatorSet();
+            logoEntrance.playTogether(
+                    ObjectAnimator.ofFloat(logo, View.ALPHA, 0f, 1f),
+                    ObjectAnimator.ofFloat(logo, View.SCALE_X, 0.78f, 1f),
+                    ObjectAnimator.ofFloat(logo, View.SCALE_Y, 0.78f, 1f));
+            logoEntrance.setDuration(520L);
+            logoEntrance.setInterpolator(new OvershootInterpolator(1.1f));
+
+            AnimatorSet nameEntrance = new AnimatorSet();
+            nameEntrance.playTogether(
+                    ObjectAnimator.ofFloat(name, View.ALPHA, 0f, 1f),
+                    ObjectAnimator.ofFloat(name, View.TRANSLATION_Y, dp(14), 0f));
+            nameEntrance.setStartDelay(180L);
+            nameEntrance.setDuration(380L);
+            nameEntrance.setInterpolator(new DecelerateInterpolator());
+
+            AnimatorSet sloganEntrance = new AnimatorSet();
+            sloganEntrance.playTogether(
+                    ObjectAnimator.ofFloat(slogan, View.ALPHA, 0f, 1f),
+                    ObjectAnimator.ofFloat(slogan, View.TRANSLATION_Y, dp(10), 0f));
+            sloganEntrance.setStartDelay(340L);
+            sloganEntrance.setDuration(380L);
+            sloganEntrance.setInterpolator(new DecelerateInterpolator());
+
+            splashEntrance = new AnimatorSet();
+            splashEntrance.playTogether(logoEntrance, nameEntrance, sloganEntrance);
+            splashEntrance.start();
+        });
         return splash;
     }
 
@@ -497,17 +548,26 @@ public class MainActivity extends FragmentActivity {
     }
 
     private void hideSplashWhenReady() {
-        if (splashView == null || splashView.getParent() == null) return;
+        if (splashView == null || splashView.getParent() == null || splashExitScheduled) return;
+        splashExitScheduled = true;
+        final View exitingSplash = splashView;
         long elapsed = SystemClock.uptimeMillis() - splashStartedAt;
-        long delay = Math.max(0L, MIN_SPLASH_MS - elapsed);
-        splashView.postDelayed(() -> {
-            if (splashView == null || splashView.getParent() == null) return;
-            splashView.animate()
+        long delay = ValueAnimator.areAnimatorsEnabled()
+                ? Math.max(0L, MIN_SPLASH_MS - elapsed) : 0L;
+        exitingSplash.postDelayed(() -> {
+            if (isFinishing() || isDestroyed() || splashView != exitingSplash
+                    || exitingSplash.getParent() == null) return;
+            exitingSplash.animate()
                     .alpha(0f)
-                    .setDuration(220L)
+                    .setDuration(ValueAnimator.areAnimatorsEnabled() ? 280L : 0L)
+                    .setInterpolator(new DecelerateInterpolator())
                     .withEndAction(() -> {
-                        if (root != null && splashView != null) root.removeView(splashView);
-                        splashView = null;
+                        if (root != null) root.removeView(exitingSplash);
+                        if (splashView == exitingSplash) splashView = null;
+                        if (splashEntrance != null) {
+                            splashEntrance.cancel();
+                            splashEntrance = null;
+                        }
                     })
                     .start();
         }, delay);
@@ -526,6 +586,11 @@ public class MainActivity extends FragmentActivity {
     }
 
     private void showStartupError(String message, String code) {
+        if (splashEntrance != null) {
+            splashEntrance.cancel();
+            splashEntrance = null;
+        }
+        if (splashView != null) splashView.animate().cancel();
         if (root == null) {
             root = new FrameLayout(this);
             setContentView(root);
@@ -734,6 +799,11 @@ public class MainActivity extends FragmentActivity {
 
     @Override
     protected void onDestroy() {
+        if (splashEntrance != null) {
+            splashEntrance.cancel();
+            splashEntrance = null;
+        }
+        if (splashView != null) splashView.animate().cancel();
         if (adsManager != null) adsManager.destroy();
         if (webView != null) {
             webView.removeJavascriptInterface("SolucionaNative");
